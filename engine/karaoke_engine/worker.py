@@ -3,6 +3,7 @@
 곡마다: (처음 한 번) 반주인지 검사 → 목소리가 거의 없으면 멈추고 사용자에게 물음(confirm) → 분리."""
 import logging
 import queue
+import shutil
 import threading
 from pathlib import Path
 from typing import Callable
@@ -17,17 +18,23 @@ SeparateFn = Callable[[Path, Path, float, Callable[[float], None]], dict]
 DetectFn = Callable[[Path, float], float]
 # download(영상 번호, 곡 폴더, 영상도 받을지, 진행률 알림) -> {"file": 소리 파일 이름, "video": 영상 파일 이름 또는 None}
 DownloadFn = Callable[[str, Path, bool, Callable[[float], None]], dict]
+MIN_FREE = 2 * 1024**3  # 남은 공간이 이보다 적으면 받기·분리를 하지 않는다 (기획서 6장: 2GB)
 INSTRUMENTAL_BELOW = 0.10  # 시험: 노래 있는 곡 63~65%, 반주·피아노 곡 0%
 
 
 class Worker:
     def __init__(self, lib: Library, separators: dict[str, SeparateFn], detect: DetectFn | None = None,
-                 download: DownloadFn | None = None, auto_lyrics=None):
+                 download: DownloadFn | None = None, auto_lyrics=None, to_cpu=None, update_downloader=None,
+                 online=None, free_space=None):
         self.lib = lib
         self.separators = separators
         self.detect = detect
         self.download = download
         self.auto_lyrics = auto_lyrics  # 원곡/목소리 경로 -> [{"t", "text"}] (음성 인식)
+        self.to_cpu = to_cpu  # 그래픽카드 메모리가 모자라면 분리를 CPU로 바꾼다
+        self.update_downloader = update_downloader  # 유튜브 받기가 실패하면 yt-dlp를 업데이트해 본다
+        self.online = online or (lambda: True)
+        self.free_space = free_space or (lambda: shutil.disk_usage(lib.data_dir).free)
         self.q: queue.Queue[str] = queue.Queue()
         threading.Thread(target=self._run, daemon=True, name="separate-worker").start()
         # 지난번에 끝내지 못한 곡은 다시 줄에 세운다
@@ -102,14 +109,35 @@ class Worker:
                 last[0] = p
                 self.lib.update(song_id, progress=round(min(p, 0.99), 2))
 
+        if (free := self.free_space()) < MIN_FREE:
+            self.lib.update(song_id, status="failed", error=f"저장 공간이 부족해요 (남은 공간 {free / 1024**3:.1f}GB)")
+            return
+        self.lib.update(song_id, notice=None)
+
         if not song.get("file"):  # 유튜브 곡: 먼저 받는다
-            self.lib.update(song_id, status="downloading", progress=0.0)
-            try:
-                got = self.download(song["source"]["id"], folder, song.get("want_video", False), on_progress)
-            except Exception as e:
-                log.exception("받기 실패 %s", song_id)
-                self.lib.update(song_id, status="failed", error=str(e) or e.__class__.__name__)
+            if not self.online():
+                self.lib.update(song_id, status="failed", error="인터넷에 연결되어 있지 않아요")
                 return
+            self.lib.update(song_id, status="downloading", progress=0.0)
+            got = None
+            for attempt in range(2):  # 실패하면 yt-dlp를 업데이트하고 한 번 더 (기획서 8.1)
+                try:
+                    got = self.download(song["source"]["id"], folder, song.get("want_video", False), on_progress)
+                    break
+                except Exception as e:
+                    log.exception("받기 실패 %s", song_id)
+                    error = str(e) or e.__class__.__name__
+                    if attempt or not self.update_downloader:
+                        break
+                    self.lib.update(song_id, notice="받기가 안 돼서 yt-dlp를 업데이트하고 다시 받아요")
+                    try:
+                        self.update_downloader()
+                    except Exception:
+                        log.exception("yt-dlp 업데이트 실패")
+            if got is None:
+                self.lib.update(song_id, status="failed", error=error, notice=None)
+                return
+            self.lib.update(song_id, notice=None)
             song = self.lib.update(song_id, file=got["file"], video=got.get("video"), progress=0.0)
             last[0] = 0.0
             if song["mode"] not in self.separators:
@@ -130,10 +158,18 @@ class Worker:
                 return
 
         self.lib.update(song_id, status="separating", progress=0.0)
-        try:
-            stems = self.separators[song["mode"]](src, folder, song["duration"], on_progress)
-        except Exception as e:
-            log.exception("분리 실패 %s", song_id)
-            self.lib.update(song_id, status="failed", error=str(e) or e.__class__.__name__)
-            return
-        self.lib.update(song_id, status="ready", progress=1.0, stems=stems, error=None)
+        for attempt in range(2):
+            try:
+                stems = self.separators[song["mode"]](src, folder, song["duration"], on_progress)
+                break
+            except Exception as e:
+                log.exception("분리 실패 %s", song_id)
+                # 그래픽카드 메모리 부족은 CPU로 한 번 더 (느리지만 끝까지 만든다, 기획서 8.1)
+                if not attempt and self.to_cpu and "out of memory" in str(e).lower():
+                    self.to_cpu()
+                    self.lib.update(song_id, progress=0.0, notice="그래픽카드 메모리가 부족해 CPU로 바꿔 만들어요 (오래 걸려요)")
+                    last[0] = 0.0
+                    continue
+                self.lib.update(song_id, status="failed", error=str(e) or e.__class__.__name__, notice=None)
+                return
+        self.lib.update(song_id, status="ready", progress=1.0, stems=stems, error=None, notice=None)

@@ -128,6 +128,24 @@ def search(query: str, karaoke_only: bool = False, count: int = 5) -> list[dict]
     return [_item(d) for d in items if d.get("id")]
 
 
+def update_ytdlp() -> str:
+    """yt-dlp를 최신으로 (유튜브가 자주 바뀐다, 기획서 F18). 결과 한 줄을 돌려준다."""
+    out = subprocess.run([yt_dlp(), "-U"], capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         timeout=120, creationflags=_NO_WINDOW)
+    lines = [x for x in (out.stdout + out.stderr).splitlines() if x.strip()]
+    return lines[-1] if lines else ""
+
+
+def online(timeout: float = 3) -> bool:
+    import socket
+
+    try:
+        socket.create_connection(("www.youtube.com", 443), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
 _PCT = re.compile(r"(\d+(?:\.\d+)?)%")
 
 

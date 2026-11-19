@@ -16,6 +16,8 @@ export type Song = {
   video?: string | null;
   progress?: number;
   error?: string | null;
+  notice?: string | null; // 하는 중에 알릴 말 (CPU로 바꿔 만들어요 등)
+  file?: string | null; // 받은 원곡 (유튜브 곡은 받기 전엔 없다)
   stems?: { instrumental: string; vocals: string; chorus?: string };
   gender?: Gender;
   prefs?: Prefs;
@@ -113,6 +115,11 @@ export const putQueue = (queue: string[]) =>
   call<{ queue: string[] }>("/queue", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queue }) });
 
 export const markPlayed = (id: string) => post<Song>(`/songs/${id}/played`);
+
+export const deleteSong = (id: string) => call<{ ok: boolean }>(`/songs/${id}`, { method: "DELETE" });
+export const remakeSong = (id: string, mode: Mode) => post<Song>(`/songs/${id}/remake`, { mode });
+export const getSystem = () => call<{ data_dir: string; free: number }>("/system");
+export const openLogs = () => post<{ path: string }>("/logs/open");
 
 export const retrySong = (id: string) => call<Song>(`/songs/${id}/retry`, { method: "POST" });
 

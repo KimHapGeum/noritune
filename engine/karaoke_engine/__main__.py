@@ -28,6 +28,16 @@ def main() -> None:
     sock.listen(128)  # 준비 신호 전에 연결을 받기 시작해야 화면의 첫 요청이 거절되지 않는다
     port = sock.getsockname()[1]
 
+    # 오류는 저장 폴더의 logs/engine.log 에 남긴다 (설정 → 로그 폴더 열기, 기획서 8.1)
+    import logging
+    from logging.handlers import RotatingFileHandler
+
+    (args.data_dir / "logs").mkdir(parents=True, exist_ok=True)
+    handler = RotatingFileHandler(args.data_dir / "logs" / "engine.log", maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    logging.getLogger().addHandler(handler)
+    logging.getLogger().setLevel(logging.INFO)
+
     app = create_app(args.data_dir)
     print(f"KARAOKE_ENGINE_READY port={port}", flush=True)
     log_level = os.environ.get("KARAOKE_ENGINE_LOG", "warning")  # 문제 찾을 때 info로

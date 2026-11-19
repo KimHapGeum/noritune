@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from .library import MODES_SEPARATE, Library, LibraryError
+from .library import MODES_READY, MODES_SEPARATE, Library, LibraryError
 from .lyrics_service import LyricsService
 from .worker import DetectFn, DownloadFn, SeparateFn, Worker
 
@@ -105,30 +105,38 @@ class Queue(BaseModel):
     queue: list[str] = Field(max_length=500)  # 곡 번호. 같은 곡을 두 번 예약해도 된다
 
 
+class Remake(BaseModel):
+    mode: str
+
+
 class SearchLyrics(BaseModel):
     title: str | None = None
     artist: str | None = None
 
 
 def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, detect: DetectFn | None = None,
-               search=None, download: DownloadFn | None = None, lyrics_search=None, auto_lyrics=None) -> FastAPI:
+               search=None, download: DownloadFn | None = None, lyrics_search=None, auto_lyrics=None,
+               to_cpu=None, update_downloader=None, online=None, free_space=None) -> FastAPI:
     if separators is None:  # 시험은 가짜를 넣는다. 진짜는 torch를 쓰므로 여기서만 불러온다
         from . import separate as real
 
         separators = {"빠른 분리": real.quick, "고품질 분리": real.hq}
         detect = real.singing_ratio
+        to_cpu = real.use_cpu
     if search is None or download is None:
         from . import youtube
 
         search = search or youtube.search
         download = download or youtube.download
+        update_downloader = update_downloader or youtube.update_ytdlp
+        online = online or youtube.online
     if lyrics_search is None or auto_lyrics is None:
         from . import lyrics
 
         lyrics_search = lyrics_search or lyrics.search
         auto_lyrics = auto_lyrics or lyrics.auto
     lib = Library(data_dir)
-    worker = Worker(lib, separators, detect, download, auto_lyrics)
+    worker = Worker(lib, separators, detect, download, auto_lyrics, to_cpu, update_downloader, online, free_space)
     lyr = LyricsService(lib, lyrics_search)
     app = FastAPI(title="karaoke-engine")
     # WebView2는 127.0.0.1로 요청하기 전에 사설망 접근 사전 요청을 보낸다. 허용 출처는 위 목록뿐이다
@@ -342,6 +350,52 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
     @app.get("/songs/{song_id}")
     def song(song_id: str):
         return find(song_id)
+
+    BUSY_NOW = {"downloading", "checking", "separating"}
+
+    @app.delete("/songs/{song_id}")
+    def delete_song(song_id: str):
+        s = find(song_id)
+        if s["status"] in BUSY_NOW or (s.get("lyrics") or {}).get("state") == "generating":
+            raise HTTPException(409, "만드는 중인 곡은 지울 수 없어요. 끝난 뒤에 지워 주세요")
+        lib.remove(song_id)
+        q = load_queue()
+        if song_id in q:
+            write_json(queue_file, json.dumps({"queue": [i for i in q if i != song_id]}))
+        return {"ok": True}
+
+    @app.post("/songs/{song_id}/remake")
+    def remake(song_id: str, body: Remake):
+        """반주 방식을 바꿔 다시 만든다 (빠른 분리로 시도 / 고품질로 다시 / 원곡 그대로 부르기 등, 기획서 F3·8.1)"""
+        s = find(song_id)
+        if body.mode not in MODES_READY | MODES_SEPARATE:
+            raise HTTPException(400, f"알 수 없는 반주 방식이에요 ({body.mode})")
+        if s["status"] in BUSY_NOW or s["status"] == "queued":
+            raise HTTPException(409, "만드는 중인 곡이에요. 끝난 뒤에 다시 해 주세요")
+        folder = lib.folder(song_id)
+        for f in (s.get("stems") or {}).values():  # 예전 반주는 지운다 (원곡은 남는다)
+            (folder / f).unlink(missing_ok=True)
+        lib.update(song_id, mode=body.mode, stems=None, checked=True, error=None)
+        if body.mode in MODES_SEPARATE or not s.get("file"):
+            worker.enqueue(song_id)  # 분리, 또는 아직 못 받은 유튜브 곡은 받기부터
+        else:
+            lib.update(song_id, status="ready", progress=1.0)
+        return lib.get(song_id)
+
+    @app.get("/system")
+    def system():
+        """저장 폴더와 남은 공간 (기획서 6장·8.1: 2GB 아래면 알린다)"""
+        import shutil
+
+        return {"data_dir": str(lib.data_dir), "free": (free_space or (lambda: shutil.disk_usage(lib.data_dir).free))()}
+
+    @app.post("/logs/open")
+    def open_logs():
+        """로그 폴더를 탐색기로 연다 (문제 신고용)"""
+        logs = lib.data_dir / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        os.startfile(logs)  # type: ignore[attr-defined]  # Windows 전용 앱
+        return {"path": str(logs)}
 
     @app.post("/songs/{song_id}/retry")
     def retry(song_id: str):

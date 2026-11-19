@@ -468,3 +468,81 @@ def test_mic_settings_default_off_and_validated(client):
     assert (s["mic_on"], s["mic_device"], s["mic_volume"], s["mic_echo"]) == (False, "", 80, 30)
     assert client.put("/settings", json={**s, "mic_volume": 200}).status_code == 422
     assert client.put("/settings", json={**s, "mic_on": True, "mic_echo": 50}).json()["mic_echo"] == 50
+
+
+def test_delete_song_removes_folder_and_queue(client, tmp_path):
+    src = make_wav(tmp_path / "내 원본.wav")
+    sid = client.post("/songs", json={"path": str(src), "mode": "원곡 그대로"}).json()["id"]
+    client.put("/queue", json={"queue": [sid]})
+    folder = tmp_path / "data" / "songs" / sid
+    assert folder.is_dir()
+    assert client.delete(f"/songs/{sid}").status_code == 200
+    assert not folder.exists() and src.exists()  # 내 PC 원본은 그대로
+    assert client.get(f"/songs/{sid}").status_code == 404
+    assert client.get("/queue").json() == {"queue": []}
+
+
+def test_remake_changes_mode_and_drops_old_stems(client, tmp_path):
+    sid = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "고품질 분리"}).json()["id"]
+    wait(client.worker)
+    assert (tmp_path / "data" / "songs" / sid / "chorus.ogg").exists()
+    r = client.post(f"/songs/{sid}/remake", json={"mode": "원곡 그대로"}).json()
+    assert r["status"] == "ready" and r["stems"] is None
+    assert not (tmp_path / "data" / "songs" / sid / "chorus.ogg").exists()
+    client.post(f"/songs/{sid}/remake", json={"mode": "빠른 분리"})
+    wait(client.worker)
+    s = client.get(f"/songs/{sid}").json()
+    assert s["status"] == "ready" and set(s["stems"]) == {"instrumental", "vocals"}
+    assert client.post(f"/songs/{sid}/remake", json={"mode": "엉터리"}).status_code == 400
+
+
+def test_gpu_out_of_memory_retries_on_cpu(tmp_path):
+    calls = []
+
+    def oom_once(src, out_dir, duration, on_progress):
+        calls.append("try")
+        if len(calls) == 1:
+            raise RuntimeError("CUDA out of memory. Tried to allocate 2.00 GiB")
+        return fake_separate(src, out_dir, duration, on_progress)
+
+    cpu = []
+    app = create_app(tmp_path / "data", separators={"빠른 분리": oom_once}, search=fake_search, download=fake_download,
+                     lyrics_search=fake_lyrics_search, auto_lyrics=fake_auto, to_cpu=lambda: cpu.append(1))
+    c = TestClient(app)
+    sid = c.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav"))}).json()["id"]
+    wait(app.state.worker)
+    assert c.get(f"/songs/{sid}").json()["status"] == "ready" and cpu == [1] and len(calls) == 2
+
+
+def test_download_failure_updates_ytdlp_then_retries(tmp_path, sample):
+    tries, updated = [], []
+
+    def flaky(vid, folder, with_video, on_progress):
+        tries.append(1)
+        if len(tries) == 1:
+            raise RuntimeError("HTTP Error 403")
+        return fake_download(vid, folder, with_video, on_progress)
+
+    app = create_app(tmp_path / "data", separators={"빠른 분리": fake_separate}, search=fake_search, download=flaky,
+                     lyrics_search=fake_lyrics_search, auto_lyrics=fake_auto, update_downloader=lambda: updated.append(1))
+    c = TestClient(app)
+    sid = add_yt(c, "우주를 줄게 (Inst.)").json()["id"]
+    wait(app.state.worker)
+    assert c.get(f"/songs/{sid}").json()["status"] == "ready" and updated == [1] and len(tries) == 2
+
+
+def test_offline_and_low_disk_fail_with_clear_message(tmp_path, sample):
+    app = create_app(tmp_path / "data", separators={"빠른 분리": fake_separate}, search=fake_search, download=fake_download,
+                     lyrics_search=fake_lyrics_search, auto_lyrics=fake_auto, online=lambda: False)
+    c = TestClient(app)
+    sid = add_yt(c, "우주를 줄게 (Inst.)").json()["id"]
+    wait(app.state.worker)
+    assert c.get(f"/songs/{sid}").json()["error"] == "인터넷에 연결되어 있지 않아요"
+
+    app2 = create_app(tmp_path / "data2", separators={"빠른 분리": fake_separate}, search=fake_search, download=fake_download,
+                      lyrics_search=fake_lyrics_search, auto_lyrics=fake_auto, free_space=lambda: 1024**3)
+    c2 = TestClient(app2)
+    sid2 = c2.post("/songs", json={"path": str(make_wav(tmp_path / "b.wav"))}).json()["id"]
+    wait(app2.state.worker)
+    assert c2.get(f"/songs/{sid2}").json()["error"] == "저장 공간이 부족해요 (남은 공간 1.0GB)"
+    assert c2.get("/system").json()["free"] == 1024**3

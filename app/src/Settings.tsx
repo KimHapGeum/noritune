@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
-import { type Settings as S } from "./api";
+import { openLogs, type Settings as S } from "./api";
 import { micLevel } from "./Mic";
 
 // licenses 폴더의 전문을 모두 보여 준다. 같은 폴더가 설치 파일의 licenses/ 로도 들어간다 (tauri.conf.json)
@@ -153,6 +153,7 @@ export default function Settings({ settings, onChange, onClose, micLatency }: {
           <section>
             <h3>정보</h3>
             <p className="muted small-p">Noritune {version && `버전 ${version}`}</p>
+            <button className="text-btn" onClick={() => openLogs().catch(() => {})}>로그 폴더 열기 (문제 신고용)</button>
             <h4>오픈 소스 라이선스</h4>
             {Object.entries(LICENSES).map(([path, text]) => {
               const id = path.split("/").pop()!.replace(/\.txt$/, "");

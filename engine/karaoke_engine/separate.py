@@ -41,7 +41,27 @@ def _ffmpeg() -> str:
     return exe
 
 
+_force_cpu = False  # 그래픽카드 메모리가 모자라 CPU로 바꿨다 (이번에 켜 있는 동안)
+
+
+def use_cpu() -> None:
+    """분리를 CPU로 바꾼다. 이미 불러온 모델도 CPU로 다시 불러오게 한다."""
+    global _force_cpu, _loaded
+    _force_cpu = True
+    _loaded = None
+    if _separator is not None:
+        _separator.torch_device = _separator.torch_device_cpu
+    try:
+        import torch
+
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def _gpu() -> bool:
+    if _force_cpu:
+        return False
     try:
         import torch
 
@@ -59,6 +79,8 @@ def _split(model: str, src: Path) -> tuple[Path, Path]:
         model_dir().mkdir(parents=True, exist_ok=True)
         work_dir().mkdir(parents=True, exist_ok=True)
         _separator = Separator(output_dir=str(work_dir()), output_format="WAV", model_file_dir=str(model_dir()))
+        if _force_cpu:
+            _separator.torch_device = _separator.torch_device_cpu
     if _loaded != model:
         _separator.load_model(model_filename=model)
         _loaded = model

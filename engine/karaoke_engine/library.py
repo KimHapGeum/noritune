@@ -79,6 +79,16 @@ class Library:
             self._save()
             return dict(song)
 
+    def remove(self, song_id: str) -> None:
+        """곡과 곡 폴더(받은 원곡·반주·가사)를 지운다. 사용자 PC의 원본 파일은 건드리지 않는다."""
+        with self._lock:
+            song = self._find(song_id)
+            self._songs.remove(song)
+            self._save()
+        folder = self.songs_dir / song["id"]
+        if folder.is_dir():
+            self._retry(lambda: shutil.rmtree(folder))
+
     def folder(self, song_id: str) -> Path:
         return self.songs_dir / self.get(song_id)["id"]
 

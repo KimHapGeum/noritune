@@ -3,10 +3,16 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { addSong, DEFAULT_SETTINGS, decideSong, getQueue, markPlayed, savePrefs, getSettings, putSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
+import { addSong, DEFAULT_SETTINGS, decideSong, deleteSong, getSystem, remakeSong, getQueue, markPlayed, savePrefs, getSettings, putSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
 import Settings from "./Settings";
 import { setMic, startMic, stopMic } from "./Mic";
 import { sendTv, useTv } from "./Tv";
+import { ask } from "@tauri-apps/plugin-dialog";
+
+// 실패한 까닭 (기획서 8.1): 사용자에게 보여 줄 수 있게 만든 말은 그대로, 아니면 무엇이 안 됐는지만
+const failText = (s: Song) =>
+  /^(저장 공간|인터넷|유튜브|이 파일|ffmpeg|yt-dlp)/.test(s.error ?? "") ? s.error!.split(":")[0]
+  : s.file ? "반주를 만들지 못했어요" : "유튜브에서 받지 못했어요";
 import QueuePanel from "./QueuePanel";
 import Player from "./Player";
 import YoutubeDialog from "./YoutubeDialog";
@@ -69,6 +75,8 @@ export default function App() {
   const settingsLoaded = useRef(false);
   const [micLatency, setMicLatency] = useState<number | null>(null);
   const tv = useTv(setError);
+  const [menuFor, setMenuFor] = useState<string | null>(null); // ⋯ 메뉴를 연 곡
+  const [lowDisk, setLowDisk] = useState<number | null>(null); // 남은 공간이 2GB 아래면 GB
   const [seen, setSeen] = useState(loadSeen);
   const markSeen = (id: string) => {
     const next = [...seen.filter((x) => x !== id), id].slice(-500);
@@ -216,6 +224,33 @@ export default function App() {
   }, [settings.mic_on, settings.mic_device]);
   useEffect(() => setMic(settings.mic_volume, settings.mic_echo), [settings.mic_volume, settings.mic_echo]);
 
+  // 남은 저장 공간 (기획서 6장: 2GB 아래로 내려가면 알린다). 곡이 늘거나 줄 때 다시 본다
+  useEffect(() => {
+    getSystem().then((s) => setLowDisk(s.free < 2 * 1024 ** 3 ? s.free / 1024 ** 3 : null)).catch(() => {});
+  }, [songs.length]);
+
+  // ⋯ 메뉴는 바깥을 누르거나 Esc로 닫는다
+  useEffect(() => {
+    if (!menuFor) return;
+    const close = (e: Event) => {
+      if (e instanceof KeyboardEvent ? e.key === "Escape" : !(e.target as HTMLElement).closest(".song-menu, .more-btn")) setMenuFor(null);
+    };
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", close);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", close);
+    };
+  }, [menuFor]);
+
+  async function removeSong(s: Song) {
+    setMenuFor(null);
+    if (playing?.song.id === s.id) return setError("부르는 중인 곡은 지울 수 없어요. 다른 곡으로 넘기거나 멈춘 뒤에 지워 주세요");
+    const yes = await ask(`'${s.title}'을(를) 지울까요?\n받은 원곡·반주·가사가 함께 지워져요. 내 PC의 원본 파일은 그대로 둬요.`,
+      { title: "곡 지우기", kind: "warning", okLabel: "지우기", cancelLabel: "취소" });
+    if (yes) act(() => deleteSong(s.id).then(() => setQueue((q) => q.filter((x) => x !== s.id))));
+  }
+
   // 부르는 곡이 없으면 TV는 기다림 화면
   useEffect(() => {
     if (tv.open && !playing) sendTv(null);
@@ -264,6 +299,12 @@ export default function App() {
         <div className="error" role="alert">
           {error}
           <button aria-label="알림 닫기" onClick={() => setError("")}>✕</button>
+        </div>
+      )}
+
+      {lowDisk !== null && (
+        <div className="error" role="alert">
+          저장 공간이 부족해요 (남은 공간 {lowDisk.toFixed(1)}GB). 곡을 지우거나 디스크 공간을 비워 주세요.
         </div>
       )}
 
@@ -333,7 +374,8 @@ export default function App() {
                         <span className="bar"><span style={{ width: `${(s.progress ?? 0) * 100}%` }} /></span>
                       </>
                     )}
-                    {s.status === "failed" && <span className="fail" title={s.error ?? ""}>반주를 만들지 못했어요</span>}
+                    {s.status === "failed" && <span className="fail" title={s.error ?? ""}>{failText(s)}</span>}
+                    {s.notice && <span className="notice-line">{s.notice}</span>}
                   </span>
                 </button>
                 <button className="reserve" onClick={() => reserve(s)} disabled={s.status === "failed"}
@@ -350,8 +392,31 @@ export default function App() {
                   );
                 })()}
                 {s.status === "failed" && (
-                  <button className="retry" onClick={() => act(() => retrySong(s.id))}>다시 시도</button>
+                  <span className="decide">
+                    <button className="retry" onClick={() => act(() => retrySong(s.id))}>다시 시도</button>
+                    {s.file && s.mode === "고품질 분리" && <button onClick={() => act(() => remakeSong(s.id, "빠른 분리"))}>빠른 분리로</button>}
+                    {s.file && <button onClick={() => act(() => remakeSong(s.id, "원곡 그대로"))}>원곡 그대로 부르기</button>}
+                  </span>
                 )}
+                <span className="menu-wrap">
+                  <button className="more-btn" aria-label={`${s.title} 메뉴`} aria-expanded={menuFor === s.id}
+                    onClick={() => setMenuFor(menuFor === s.id ? null : s.id)}>⋯</button>
+                  {menuFor === s.id && (
+                    <div className="song-menu" role="menu">
+                      <button role="menuitem" onClick={() => { setMenuFor(null); setEditFor(s); }}>가사 편집</button>
+                      <button role="menuitem" onClick={() => { setMenuFor(null); setLyricsFor(s); }}>다른 가사 고르기</button>
+                      {s.file && !["queued", "downloading", "checking", "separating"].includes(s.status) && (
+                        <>
+                          <div className="menu-label">반주 다시 만들기</div>
+                          {MODES.filter((m) => m !== s.mode).map((m) => (
+                            <button key={m} role="menuitem" onClick={() => { setMenuFor(null); act(() => remakeSong(s.id, m)); }}>{m}</button>
+                          ))}
+                        </>
+                      )}
+                      <button role="menuitem" className="danger" onClick={() => removeSong(s)}>곡 지우기</button>
+                    </div>
+                  )}
+                </span>
                 {s.status === "confirm" && (
                   <span className="decide">
                     <button className="primary" onClick={() => act(() => decideSong(s.id, "keep"))}>분리 없이 쓰기</button>
