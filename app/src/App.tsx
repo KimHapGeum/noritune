@@ -3,7 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { addSong, decideSong, getQueue, getSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
+import { addSong, DEFAULT_SETTINGS, decideSong, getQueue, getSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
 import Settings from "./Settings";
 import QueuePanel from "./QueuePanel";
 import Player from "./Player";
@@ -57,7 +57,7 @@ export default function App() {
   const [lyricsFor, setLyricsFor] = useState<Song | null>(null);
   const [editFor, setEditFor] = useState<Song | null>(null);
   const [lyricsRev, setLyricsRev] = useState(0); // 가사를 바꾸면 재생 화면이 다시 받도록
-  const [settings, setSettings] = useState<AppSettings>({ lyrics_delay: 0 });
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [seen, setSeen] = useState(loadSeen);
   const markSeen = (id: string) => {
@@ -292,7 +292,7 @@ export default function App() {
       <QueuePanel queue={queue} songs={songs} onChange={changeQueue} />
       </div>
 
-      {playing && <Player key={playing.n} song={playing.song} hasNext={queue.length > 0} onEnded={playNext} lyricsRev={lyricsRev} lyricsDelay={settings.lyrics_delay} onError={setError} onChanged={refresh} />}
+      {playing && <Player key={playing.n} song={songs.find((s) => s.id === playing.song.id) ?? playing.song} settings={settings} hasNext={queue.length > 0} onEnded={playNext} lyricsRev={lyricsRev} onError={setError} onChanged={refresh} />}
       {lyricsFor && (
         <LyricsChooser song={lyricsFor} onClose={() => setLyricsFor(null)}
           onChanged={() => { refresh(); setLyricsRev((r) => r + 1); }}

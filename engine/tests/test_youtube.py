@@ -41,3 +41,16 @@ def test_clean_strips_decorations():
 ])
 def test_video_id(text, vid):
     assert video_id(text) == vid
+
+
+def test_pick_mv_prefers_official_and_skips_covers():
+    from karaoke_engine.youtube import pick_mv
+    results = [
+        {"id": "a" * 11, "title": "밤편지 노래방 TJ", "channel": "TJ"},
+        {"id": "b" * 11, "title": "아이유 밤편지 피아노 커버", "channel": "someone"},
+        {"id": "c" * 11, "title": "밤편지 (Live)", "channel": "IU"},
+        {"id": "d" * 11, "title": "[MV] IU(아이유) _ Through the Night(밤편지)", "channel": "1theK (원더케이)"},
+        {"id": "e" * 11, "title": "아이유 - 밤편지", "channel": "이지금 [IU Official]"},
+        {"id": "f" * 11, "title": "Alive", "channel": "x"},  # live 가 단어 안에 있어도 빼지 않는다
+    ]
+    assert pick_mv(results, "아이유", "밤편지") == ["d" * 11, "e" * 11, "f" * 11]

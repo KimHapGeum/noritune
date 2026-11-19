@@ -208,3 +208,45 @@ main h2 { margin: 0 0 16px; font-size: 22px; }
 .reserve { height: 34px; padding: 0 12px; margin-right: 8px; border-radius: 10px; border: 1px solid #2c2f3b; background: #181a22; font-size: 13px; white-space: nowrap; }
 .reserve:disabled { opacity: 0.4; }
 .player .next { width: 44px; height: 44px; border-radius: 12px; border: 1px solid #2c2f3b; background: #181a22; font-size: 16px; }
+
+/* 노래방 화면 (기획서 F6·F11·F12) */
+.player-wrap.full { position: fixed; inset: 0; z-index: 5; display: flex; flex-direction: column; background: #000; }
+.stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.stage-bg, .stage-dim { position: absolute; inset: 0; }
+.stage-dim { background: #000; pointer-events: none; }
+.bg-media { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bg-yt { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+/* 16:9 영상이 화면을 꽉 채우도록 (넘치는 부분은 잘림) */
+.bg-yt iframe { position: absolute; top: 50%; left: 50%; width: max(100%, 177.78vh); height: max(100%, 56.25vw); transform: translate(-50%, -50%); border: 0; }
+.bg-default { position: absolute; inset: 0; background: radial-gradient(ellipse at 20% 30%, #3b1f4a 0%, transparent 55%), radial-gradient(ellipse at 80% 70%, #123a4f 0%, transparent 55%), #0b0c12; background-size: 160% 160%; animation: bg-drift 30s ease-in-out infinite alternate; }
+@keyframes bg-drift { from { background-position: 0% 0%; } to { background-position: 100% 100%; } }
+@media (prefers-reduced-motion: reduce) { .bg-default { animation: none; } }
+.stage-top { position: relative; z-index: 2; display: flex; align-items: center; gap: 10px; padding: 14px 24px; background: linear-gradient(rgba(0,0,0,0.55), transparent); }
+.stage-top > button { height: 38px; padding: 0 14px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.18); background: rgba(20,22,30,0.7); }
+.stage-top > button.on { border-color: var(--accent); }
+.stage-title { flex: 1; min-width: 0; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-shadow: 0 1px 4px #000; }
+.stage-lyrics { position: absolute; left: 0; right: 0; bottom: 6%; z-index: 1; }
+.stage .lyrics-view { background: none; border: 0; }
+.stage .lyrics-view p { text-shadow: 0 2px 6px rgba(0,0,0,0.9), 0 0 2px #000; }
+.stage .lyr-cur { font-size: 52px; }
+.stage .lyr-next { font-size: 32px; color: #c9cdda; }
+.stage .lyr-prev { color: #a3a8ba; }
+.stage .sung { text-shadow: none; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.9)); }
+.bg-pop { position: absolute; top: 60px; right: 24px; z-index: 3; display: flex; flex-direction: column; gap: 8px; width: 320px; padding: 14px; border-radius: 14px; background: var(--panel); border: 1px solid #2c2f3b; }
+.bg-pop button { height: 38px; border-radius: 10px; border: 1px solid #2c2f3b; background: #181a22; text-align: left; padding: 0 12px; }
+.bg-pop button.on { border-color: var(--accent); }
+.bg-url { display: flex; gap: 6px; }
+.bg-url input { flex: 1; min-width: 0; height: 38px; border-radius: 10px; border: 1px solid #2c2f3b; background: var(--bg); color: var(--text); font: inherit; padding: 0 10px; }
+.bg-url button { flex: none; }
+.seg { display: flex; gap: 6px; flex-wrap: wrap; }
+.seg button { height: 38px; padding: 0 14px; border-radius: 10px; border: 1px solid #2c2f3b; background: #181a22; }
+.seg button.on { border-color: var(--accent); color: var(--text); }
+.row-label { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #c9cdda; }
+.row-label select { height: 34px; border-radius: 8px; border: 1px solid #2c2f3b; background: #181a22; color: var(--text); font: inherit; }
+.row-label input { flex: 1; accent-color: var(--accent); }
+.row-label b { color: var(--accent); min-width: 40px; }
+.bg-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.bg-files li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 8px; background: var(--bg); font-size: 13px; }
+.bg-files span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bg-files button { border: 0; background: none; color: var(--muted); }
+.player .next { width: auto; min-width: 44px; padding: 0 10px; }

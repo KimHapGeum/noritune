@@ -48,6 +48,28 @@ def guess(title: str, channel: str = "") -> tuple[str, str]:
     return base or title, re.sub(r"\s*-\s*Topic$", "", channel or "").strip()
 
 
+_NOT_MV = re.compile(r"노래방|karaoke|가라오케|\bmr\b|\binst|cover|커버|lyrics?|가사|\blive\b|라이브|reaction|리액션|teaser|티저|"
+                     r"behind|비하인드|직캠|fancam|shorts|piano|피아노", re.IGNORECASE)
+_MV = re.compile(r"official|\bm/?v\b|뮤직비디오|music video", re.IGNORECASE)
+
+
+def pick_mv(results: list[dict], artist: str, title: str, keep: int = 3) -> list[str]:
+    """검색 결과에서 공식 뮤직비디오 같은 것을 고른다 (기획서 F11). 좋은 순서로 영상 번호를 돌려준다.
+    제목에 Official·MV가 있거나 가수 이름의 채널이면 앞으로, 노래방·커버·라이브 같은 것은 뺀다. 곡 길이는 보지 않는다."""
+    a = re.sub(r"\s", "", artist).lower()
+    t = re.sub(r"\s", "", title).lower()
+    scored = []
+    for i, r in enumerate(results):
+        name = r.get("title") or ""
+        if _NOT_MV.search(name):
+            continue
+        flat = re.sub(r"\s", "", name).lower()
+        ch = re.sub(r"\s", "", r.get("channel") or "").lower()
+        score = 2 * bool(_MV.search(name)) + 2 * bool(a and a in ch) + bool(t and t in flat) + bool(a and a in flat)
+        scored.append((-score, i, r["id"]))
+    return [vid for _, _, vid in sorted(scored)[:keep]]
+
+
 def video_id(text: str) -> str | None:
     text = text.strip()
     if VIDEO_ID.match(text):

@@ -9,13 +9,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .library import MODES_SEPARATE, Library, LibraryError
 from .lyrics_service import LyricsService
 from .worker import DetectFn, DownloadFn, SeparateFn, Worker
 
 SONG_ID = re.compile(r"^[0-9a-f]{32}$")
+# 배경으로 쓸 수 있는 내 파일 (기획서 F11 사용자 설정 배경화면)
+BG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".mp4", ".webm", ".mov", ".m4v"}
+
+
+def bg_file(path: str) -> str:
+    p = Path(path)
+    if not p.is_absolute() or p.suffix.lower() not in BG_EXTS:
+        raise ValueError("사진(jpg·png·webp·gif)이나 영상(mp4·webm·mov) 파일만 배경으로 쓸 수 있어요")
+    return str(p)
 PARTS = {"original", "video", "instrumental", "vocals", "chorus"}
 # Tauri 창(배포판·개발판)과 Vite 개발 서버만 허용
 ALLOWED_ORIGINS = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:1420"]
@@ -63,11 +72,26 @@ class Prefs(BaseModel):
     chorus: int | None = Field(None, ge=0, le=150)
     lowpass: Literal[0, 12000, 9000, 7000, 5000, 3500] | None = None
     verb: int | None = Field(None, ge=0, le=100)
+    lyrics: bool | None = None  # 이 곡에서 앱 가사를 켤지 (기획서 F12: 곡마다 기억)
+    # 이 곡만의 배경 (기획서 F11 "배경 바꾸기"). auto: 설정을 따른다
+    bg_kind: Literal["auto", "default", "youtube", "file"] | None = None
+    bg_value: str | None = Field(None, max_length=1000)
 
 
 class Settings(BaseModel):
     """앱 설정 (모든 곡에 같이 쓴다). 새 항목은 기본값을 꼭 둔다: 예전 settings.json에는 없다."""
     lyrics_delay: float = Field(0, ge=-2, le=2)  # 가사 시간 보정(초). +면 가사가 늦게 나온다
+    # 재생 화면 배경 (기획서 F11)
+    bg_mode: Literal["default", "mv", "custom"] = "mv"
+    bg_mv_fallback: Literal["default", "custom"] = "default"  # 뮤비를 못 찾았을 때
+    bg_files: list[str] = Field(default_factory=list, max_length=50)
+    bg_interval: Literal[10, 30, 0] = 10  # 사진 여러 장일 때 바꾸는 간격(초). 0: 곡마다
+    bg_dim: int = Field(55, ge=0, le=90)
+
+    @field_validator("bg_files")
+    @classmethod
+    def _files(cls, v: list[str]) -> list[str]:
+        return [bg_file(x) for x in v]
 
 
 class Queue(BaseModel):
@@ -205,6 +229,41 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
         known = {s["id"] for s in lib.list()}
         return [i for i in ids if i in known]
 
+    @app.get("/songs/{song_id}/mv")
+    def find_mv(song_id: str):
+        """이 곡의 공식 뮤직비디오 후보 (좋은 순). 한 번 찾으면 곡 정보에 남겨 다시 찾지 않는다."""
+        s = find(song_id)
+        if "mv" not in s:
+            from .youtube import pick_mv
+
+            try:
+                ids = pick_mv(search(f"{s['artist']} {s['title']} Official MV".strip(), False), s["artist"], s["title"])
+            except Exception:
+                return {"ids": []}  # 인터넷이 없으면 저장하지 않고 다음에 다시 찾는다
+            s = lib.update(song_id, mv=ids)
+        return {"ids": s["mv"]}
+
+    @app.post("/songs/{song_id}/mv/bad")
+    def bad_mv(song_id: str, body: Queue):
+        """퍼가기를 막아 둔 영상처럼 틀 수 없던 뮤비를 후보에서 뺀다."""
+        s = find(song_id)
+        return {"ids": lib.update(song_id, mv=[i for i in s.get("mv", []) if i not in body.queue])["mv"]}
+
+    def send_bg(path: str | None):
+        if not path or not Path(path).is_file():
+            raise HTTPException(404, "배경 파일을 찾을 수 없어요")
+        return FileResponse(path)
+
+    @app.get("/background/{index}")
+    def background(index: int):
+        files = load_settings().bg_files  # 설정에 넣은 파일만 보낸다
+        return send_bg(files[index] if 0 <= index < len(files) else None)
+
+    @app.get("/songs/{song_id}/background")
+    def song_background(song_id: str):
+        p = find(song_id).get("prefs") or {}
+        return send_bg(p.get("bg_value") if p.get("bg_kind") == "file" else None)
+
     @app.get("/queue")
     def get_queue():
         return {"queue": load_queue()}
@@ -221,6 +280,19 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
     def save_prefs(song_id: str, body: Prefs):
         s = find(song_id)
         new = body.model_dump(exclude_unset=True, exclude_none=True)
+        if new.get("bg_kind") == "youtube":
+            from .youtube import video_id
+
+            if not (vid := video_id(new.get("bg_value") or "")):
+                raise HTTPException(400, "유튜브 주소를 알아볼 수 없어요")
+            new["bg_value"] = vid
+        elif new.get("bg_kind") == "file":
+            try:
+                new["bg_value"] = bg_file(new.get("bg_value") or "")
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from None
+        if new.get("lyrics") and (s.get("lyrics") or {}).get("state") == "off":
+            lyr.start(song_id)  # 노래방 영상 곡에서 가사를 켜는 순간 찾는다 (기획서 F12)
         fields = {"prefs": {**(s.get("prefs") or {}), **{k: v for k, v in new.items() if k != "gender"}}}
         if "gender" in new:
             fields["gender"] = new["gender"]

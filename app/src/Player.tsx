@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { audioUrl, getLyrics, savePrefs, type Gender, type LyricLine, type Part, type Prefs, type Song } from "./api";
+import { open as openFile } from "@tauri-apps/plugin-dialog";
+import { audioUrl, getLyrics, savePrefs, type Gender, type LyricLine, type Part, type Prefs, type Settings, type Song } from "./api";
+import Stage from "./Stage";
 import LyricsEditor from "./LyricsEditor";
 import SignalsmithStretch from "./vendor/SignalsmithStretch.mjs";
 
 /** 지금 부르는 줄(크게, 부른 만큼 색이 차오름)과 다음 줄을 보여 준다. */
 function LyricsView({ lines, pos, state }: { lines: LyricLine[]; pos: number; state?: string }) {
-  if (state === "off") return null;
   if (!lines.length) {
-    const msg = state === "searching" ? "가사를 찾는 중이에요" : state === "generating" ? "가사를 만드는 중이에요" : "가사가 없어요";
+    const msg = state === "searching" || state === "off" ? "가사를 찾는 중이에요" : state === "generating" ? "가사를 만드는 중이에요" : "가사가 없어요";
     return <div className="lyrics-view empty">{msg}</div>;
   }
   let i = -1;
@@ -60,8 +61,8 @@ const typingIn = (e: KeyboardEvent) => !!(e.target as HTMLElement).closest?.("in
 // shortcut: 키 엔진(Signalsmith 기본 설정) 지연을 2026-11-20 앱에서 잰 값(키와 상관없이 0.12초). 엔진 설정을 바꾸면 다시 잰다
 const ENGINE_LATENCY = 0.12;
 
-export default function Player({ song, lyricsRev, lyricsDelay, hasNext, onEnded, onError, onChanged }: {
-  song: Song; lyricsRev: number; lyricsDelay: number; hasNext: boolean; onEnded: () => void;
+export default function Player({ song, settings, lyricsRev, hasNext, onEnded, onError, onChanged }: {
+  song: Song; settings: Settings; lyricsRev: number; hasNext: boolean; onEnded: () => void;
   onError: (msg: string) => void; onChanged: () => void;
 }) {
   const separated = !!song.stems;
@@ -85,6 +86,11 @@ export default function Player({ song, lyricsRev, lyricsDelay, hasNext, onEnded,
   const [editing, setEditing] = useState<{ at: number; resume: boolean } | null>(null);
   const [rev, setRev] = useState(0);
   const [latency, setLatency] = useState(0); // 소리가 실제로 들리기까지 (키 엔진 + 스피커)
+  // 앱 가사: 곡마다 기억 (기획서 F12). 처음엔 노래방 영상이면 끔
+  const [lyricsOn, setLyricsOn] = useState(p.lyrics ?? song.app_lyrics !== false);
+  const [stageOpen, setStageOpen] = useState(true);
+  const [bgOpen, setBgOpen] = useState(false);
+  const [bgUrlText, setBgUrlText] = useState(p.bg_kind === "youtube" ? `https://youtu.be/${p.bg_value}` : "");
 
   // 가사는 곡을 고를 때와, 가사를 고르거나 만들어 상태가 바뀔 때 다시 받는다
   useEffect(() => {
@@ -304,7 +310,7 @@ export default function Player({ song, lyricsRev, lyricsDelay, hasNext, onEnded,
     if (e.key === "ArrowUp" || e.key === "+") changeKey(1);
     else if (e.key === "ArrowDown" || e.key === "-") changeKey(-1);
     else if (e.key === "0") choosePreset("orig");
-    else if ((e.key === "e" || e.key === "E") && song.lyrics?.state !== "off") openEditor();
+    else if ((e.key === "e" || e.key === "E") && lyricsOn) openEditor();
     else return;
     e.preventDefault();
   };
@@ -314,12 +320,59 @@ export default function Player({ song, lyricsRev, lyricsDelay, hasNext, onEnded,
     return () => window.removeEventListener("keydown", on);
   }, []);
 
+  function toggleLyrics() {
+    const on = !lyricsOn;
+    setLyricsOn(on);
+    savePrefs(song.id, { lyrics: on }).then(onChanged).catch(() => {});
+  }
+
+  async function setBg(kind: NonNullable<Prefs["bg_kind"]>, value?: string) {
+    try {
+      await savePrefs(song.id, { bg_kind: kind, bg_value: value ?? null });
+      onChanged();
+      setBgOpen(false);
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  }
+
+  async function pickBgFile() {
+    const f = await openFile({ filters: [{ name: "사진·영상", extensions: ["jpg", "jpeg", "png", "webp", "gif", "bmp", "mp4", "webm", "mov", "m4v"] }] });
+    if (typeof f === "string") setBg("file", f);
+  }
+
+  // 들리는 소리 위치: 들리기까지의 지연(곡 시간으로는 속도만큼)을 뺀다. 가사는 사용자 보정도 뺀다
+  const heard = Math.max(0, pos - latency * tempo);
+  const bgKind = p.bg_kind ?? "auto";
+
   return (
-    <>
-    {/* 가사는 들리는 소리에 맞춘다: 들리기까지의 지연(곡 시간으로는 속도만큼)과 사용자 보정을 뺀다 */}
-    <LyricsView lines={lyrics} pos={Math.max(0, pos - latency * tempo - lyricsDelay)} state={song.lyrics?.state} />
-    {song.lyrics?.state !== "off" && (
-      <div className="lyr-tools"><button onClick={openEditor} disabled={loading} title="단축키 E">가사 고치기</button></div>
+    <div className={stageOpen ? "player-wrap full" : "player-wrap"}>
+    {stageOpen && (
+      <Stage song={song} settings={settings} heardPos={heard} tempo={tempo} playing={playing} lyricsOn={lyricsOn}
+        top={
+          <>
+            <button onClick={() => setStageOpen(false)} aria-label="곡 목록으로">← 곡 목록</button>
+            <b className="stage-title">{song.title} <span className="muted">{song.artist}</span></b>
+            <button onClick={toggleLyrics} aria-pressed={lyricsOn} className={lyricsOn ? "on" : ""}
+              title={song.video ? "가사를 끄면 노래방 영상이 화면 전체에 나와요" : ""}>가사 {lyricsOn ? "켬" : "끔"}</button>
+            {lyricsOn && <button onClick={openEditor} disabled={loading} title="단축키 E">가사 고치기</button>}
+            {!(song.video && !lyricsOn) && <button onClick={() => setBgOpen((o) => !o)} aria-expanded={bgOpen}>배경 바꾸기</button>}
+            {bgOpen && (
+              <div className="bg-pop" role="group" aria-label="이 곡의 배경">
+                {([["auto", "설정 따르기"], ["default", "기본 배경화면"]] as const).map(([k, label]) => (
+                  <button key={k} className={bgKind === k ? "on" : ""} onClick={() => setBg(k)}>{label}</button>
+                ))}
+                <div className="bg-url">
+                  <input value={bgUrlText} onChange={(e) => setBgUrlText(e.target.value)} placeholder="유튜브 주소 붙여넣기" aria-label="배경 유튜브 주소" />
+                  <button className={bgKind === "youtube" ? "on" : ""} onClick={() => setBg("youtube", bgUrlText)} disabled={!bgUrlText.trim()}>이 영상</button>
+                </div>
+                <button className={bgKind === "file" ? "on" : ""} onClick={pickBgFile}>내 사진·영상 고르기…</button>
+              </div>
+            )}
+          </>
+        }>
+        {lyricsOn && <LyricsView lines={lyrics} pos={Math.max(0, heard - settings.lyrics_delay)} state={song.lyrics?.state} />}
+      </Stage>
     )}
     {editing && (
       <LyricsEditor song={song} startAt={editing.at}
@@ -358,6 +411,7 @@ export default function Player({ song, lyricsRev, lyricsDelay, hasNext, onEnded,
         aria-label={playing ? "일시정지" : "재생"}>
         {playing ? "❚❚" : "▶"}
       </button>
+      {!stageOpen && <button className="next" onClick={() => setStageOpen(true)} title="노래방 화면 보기">노래방 화면</button>}
       {hasNext && <button className="next" onClick={onEnded} aria-label="다음 곡" title="다음 예약곡으로">⏭</button>}
       <div className="now">
         <b>{song.title}</b> <span className="muted">{song.artist}</span>
@@ -417,6 +471,6 @@ export default function Player({ song, lyricsRev, lyricsDelay, hasNext, onEnded,
         </div>
       </div>
     </footer>
-    </>
+    </div>
   );
 }

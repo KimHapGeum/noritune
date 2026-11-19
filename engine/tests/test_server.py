@@ -377,14 +377,14 @@ def test_prefs_are_remembered_per_song(client, tmp_path):
 
 def test_settings_saved_and_validated(tmp_path):
     c, _ = make_client(tmp_path / "data")
-    assert c.get("/settings").json() == {"lyrics_delay": 0}
+    assert c.get("/settings").json()["lyrics_delay"] == 0
     assert c.put("/settings", json={"lyrics_delay": 0.25}).json()["lyrics_delay"] == 0.25
     assert c.put("/settings", json={"lyrics_delay": 5}).status_code == 422
     (tmp_path / "data" / "settings.json").write_text("{깨짐", encoding="utf-8")
-    assert c.get("/settings").json() == {"lyrics_delay": 0}  # 깨진 파일은 기본값
+    assert c.get("/settings").json()["lyrics_delay"] == 0  # 깨진 파일은 기본값
     c.put("/settings", json={"lyrics_delay": -0.1})
     c2, _ = make_client(tmp_path / "data")  # 다시 켜도 남는다
-    assert c2.get("/settings").json() == {"lyrics_delay": -0.1}
+    assert c2.get("/settings").json()["lyrics_delay"] == -0.1
 
 
 def test_queue_saved_and_reserved_song_made_first(tmp_path):
@@ -406,3 +406,49 @@ def test_queue_saved_and_reserved_song_made_first(tmp_path):
     assert c.put("/queue", json={"queue": ["0" * 32]}).status_code == 404
     c2, _ = make_client(tmp_path / "data")
     assert c2.get("/queue").json() == {"queue": [ids[2], ids[2]]}  # 다시 켜도 남는다
+
+
+def test_mv_found_once_and_bad_ones_dropped(tmp_path):
+    calls = []
+
+    def search(q, karaoke_only):
+        calls.append(q)
+        return [{"id": "x" * 11, "title": "가수 노래 Official MV", "channel": "가수"},
+                {"id": "y" * 11, "title": "가수 노래 노래방", "channel": "TJ"}]
+
+    app = create_app(tmp_path / "data", separators={"빠른 분리": fake_separate}, search=search, download=fake_download,
+                     lyrics_search=fake_lyrics_search, auto_lyrics=fake_auto)
+    c = TestClient(app)
+    sid = c.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "원곡 그대로"}).json()["id"]
+    assert c.get(f"/songs/{sid}/mv").json() == {"ids": ["x" * 11]}
+    assert c.get(f"/songs/{sid}/mv").json() == {"ids": ["x" * 11]}
+    assert len(calls) == 1 and calls[0].endswith("Official MV")  # 두 번째는 저장해 둔 것
+    assert c.post(f"/songs/{sid}/mv/bad", json={"queue": ["x" * 11]}).json() == {"ids": []}
+
+
+def test_background_settings_and_files(client, tmp_path):
+    pic = tmp_path / "내 사진.png"
+    pic.write_bytes(b"png")
+    s = client.get("/settings").json()
+    assert (s["bg_mode"], s["bg_mv_fallback"], s["bg_dim"], s["bg_files"]) == ("mv", "default", 55, [])
+    assert client.put("/settings", json={"bg_files": [str(tmp_path / "x.exe")]}).status_code == 422
+    assert client.put("/settings", json={"bg_files": ["relative.png"]}).status_code == 422
+    assert client.put("/settings", json={"bg_mode": "custom", "bg_files": [str(pic)]}).status_code == 200
+    assert client.get("/background/0").content == b"png"
+    assert client.get("/background/1").status_code == 404
+
+    sid = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "원곡 그대로"}).json()["id"]
+    assert client.patch(f"/songs/{sid}/prefs", json={"bg_kind": "youtube", "bg_value": "주소 아님"}).status_code == 400
+    r = client.patch(f"/songs/{sid}/prefs", json={"bg_kind": "youtube", "bg_value": "https://youtu.be/aE3irDN5yqQ"}).json()
+    assert r["prefs"]["bg_value"] == "aE3irDN5yqQ"
+    assert client.get(f"/songs/{sid}/background").status_code == 404  # 파일 배경이 아니다
+    client.patch(f"/songs/{sid}/prefs", json={"bg_kind": "file", "bg_value": str(pic)})
+    assert client.get(f"/songs/{sid}/background").content == b"png"
+
+
+def test_turning_lyrics_on_for_karaoke_video_starts_search(client, sample):
+    LYRICS["cands"] = [cand(1, recommended=True)]
+    song = add_yt(client, "밤편지 [TJ노래방]").json()
+    assert song["lyrics"]["state"] == "off"
+    client.patch(f"/songs/{song['id']}/prefs", json={"lyrics": True})
+    assert wait_lyrics(client, song["id"]) == "review"

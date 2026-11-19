@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export const MODES = ["빠른 분리", "고품질 분리", "반주 그대로", "원곡 그대로"] as const;
 export type Mode = (typeof MODES)[number];
-export type Part = "original" | "instrumental" | "vocals" | "chorus";
+export type Part = "original" | "instrumental" | "vocals" | "chorus" | "video";
 
 export type Song = {
   id: string;
@@ -24,6 +24,8 @@ export type Gender = "male" | "female" | "mixed";
 export type Prefs = {
   key?: number; preset?: "orig" | "male" | "female"; tempo?: number;
   guide?: number; chorus?: number; lowpass?: number; verb?: number;
+  lyrics?: boolean; // 이 곡에서 앱 가사를 켤지
+  bg_kind?: "auto" | "default" | "youtube" | "file"; bg_value?: string | null; // 이 곡만의 배경
 };
 
 let base: Promise<string> | null = null;
@@ -83,7 +85,17 @@ export const savePrefs = (id: string, body: Prefs & { gender?: Gender }) =>
   call<Song>(`/songs/${id}/prefs`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 /** 앱 설정 (모든 곡에 같이 쓴다) */
-export type Settings = { lyrics_delay: number };
+export type Settings = {
+  lyrics_delay: number;
+  bg_mode: "default" | "mv" | "custom"; bg_mv_fallback: "default" | "custom";
+  bg_files: string[]; bg_interval: 10 | 30 | 0; bg_dim: number;
+};
+export const DEFAULT_SETTINGS: Settings = { lyrics_delay: 0, bg_mode: "mv", bg_mv_fallback: "default", bg_files: [], bg_interval: 10, bg_dim: 55 };
+/** 공식 뮤비 후보 (좋은 순). badMv: 틀 수 없던 것을 뺀다 */
+export const findMv = (id: string) => call<{ ids: string[] }>(`/songs/${id}/mv`).then((r) => r.ids);
+export const badMv = (id: string, vid: string) => post<{ ids: string[] }>(`/songs/${id}/mv/bad`, { queue: [vid] });
+export const bgUrl = async (i: number) => `${await engineUrl()}/background/${i}`;
+export const songBgUrl = async (id: string) => `${await engineUrl()}/songs/${id}/background`;
 export const getSettings = () => call<Settings>("/settings");
 export const putSettings = (body: Settings) =>
   call<Settings>("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
