@@ -25,13 +25,39 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "C:/Users/osj00/.cache/karaoke/pyinstaller/dist/noritune-engine/": "engine/"
+    },
+    "windows": {
+      "nsis": {
+        "languages": [
+          "Korean"
+        ],
+        "installMode": "currentUser"
+      }
+    },
+    "shortDescription": "내 노래를 반주로 만들어 부르는 PC 노래방"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1MzM5OENCOENCODQyREYKUldUZlFyaU15NWd6ZFJMMTMxcGtjaTR3UjFkS1R1cTZ6a3ZxdXR1ZENrYlo1eGE4b3A2TGFGSjAK",
+      "endpoints": [
+        "https://github.com/KimHapGeum/noritune-update/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

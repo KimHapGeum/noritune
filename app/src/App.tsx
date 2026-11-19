@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { addSong, audioUrl, listSongs, type Song } from "./api";
 import "./App.css";
 
@@ -14,6 +16,20 @@ export default function App() {
   const [dragging, setDragging] = useState(false);
   const [playing, setPlaying] = useState<Song | null>(null);
   const audio = useRef<HTMLAudioElement>(null);
+  const [update, setUpdate] = useState<Update | null>(null);
+  const [updating, setUpdating] = useState(false);
+
+  async function installUpdate() {
+    if (!update) return;
+    setUpdating(true);
+    try {
+      await update.downloadAndInstall();
+      await relaunch();
+    } catch (e) {
+      setUpdating(false);
+      setError(`업데이트하지 못했어요: ${(e as Error).message ?? e}`);
+    }
+  }
 
   const refresh = () => listSongs().then(setSongs).catch((e) => setError(String(e.message ?? e)));
 
@@ -47,6 +63,8 @@ export default function App() {
 
   useEffect(() => {
     refresh();
+    // 켤 때 새 버전 확인. 인터넷이 없거나 개발판이면 조용히 넘어간다
+    check().then(setUpdate).catch(() => {});
     // 창에 파일을 끌어다 놓으면 곡 추가
     const off = getCurrentWebview().onDragDropEvent((e) => {
       if (e.payload.type === "enter" || e.payload.type === "over") setDragging(true);
@@ -64,6 +82,16 @@ export default function App() {
           {busy ? "추가하는 중…" : "+ 곡 추가"}
         </button>
       </header>
+
+      {update && (
+        <div className="update" role="status">
+          새 버전 {update.version}이 있어요.
+          <button className="primary" onClick={installUpdate} disabled={updating}>
+            {updating ? "받는 중…" : "업데이트"}
+          </button>
+          <button aria-label="다음에 하기" onClick={() => setUpdate(null)} disabled={updating}>나중에</button>
+        </div>
+      )}
 
       {error && (
         <div className="error" role="alert">

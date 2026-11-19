@@ -17,28 +17,39 @@ fn engine_port(engine: tauri::State<Engine>) -> u16 {
     engine.port
 }
 
-/// 개발용 처리기 실행 명령.
-/// shortcut: 개발 PC의 가상환경 파이썬을 직접 부른다. 배포판을 만들 때 PyInstaller로 묶은 sidecar 실행으로 바꾼다.
-fn engine_command() -> Command {
-    let engine_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../engine");
-    let python = std::env::var("KARAOKE_ENGINE_PYTHON").map(PathBuf::from).unwrap_or_else(|_| {
-        PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
-            .join(".venvs/karaoke-engine/Scripts/python.exe")
-    });
-    let mut cmd = Command::new(python);
-    cmd.args(["-m", "karaoke_engine"]).current_dir(engine_dir);
+/// 처리기 실행 명령. 배포판은 설치 폴더의 engine/noritune-engine.exe (PyInstaller로 묶은 것),
+/// 개발판은 개발 PC의 가상환경 파이썬으로 소스를 바로 실행한다.
+fn engine_command(app: &tauri::AppHandle) -> Result<Command, String> {
+    let mut cmd = if cfg!(debug_assertions) {
+        let engine_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../engine");
+        let python = std::env::var("KARAOKE_ENGINE_PYTHON").map(PathBuf::from).unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default())
+                .join(".venvs/karaoke-engine/Scripts/python.exe")
+        });
+        let mut c = Command::new(python);
+        c.args(["-m", "karaoke_engine"]).current_dir(engine_dir);
+        c
+    } else {
+        let exe = app
+            .path()
+            .resource_dir()
+            .map_err(|e| format!("설치 폴더를 찾지 못했어요: {e}"))?
+            .join("engine")
+            .join("noritune-engine.exe");
+        Command::new(exe)
+    };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NO_WINDOW: u32 = 0x0800_0000; // 검은 콘솔 창을 띄우지 않는다
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
-    cmd
+    Ok(cmd)
 }
 
 /// 처리기를 켜고 `KARAOKE_ENGINE_READY port=<번호>` 줄을 기다린다.
-fn start_engine() -> Result<(Child, u16), String> {
-    let mut child = engine_command()
+fn start_engine(app: &tauri::AppHandle) -> Result<(Child, u16), String> {
+    let mut child = engine_command(app)?
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()
@@ -65,8 +76,10 @@ fn start_engine() -> Result<(Child, u16), String> {
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            let (child, port) = start_engine()?;
+            let (child, port) = start_engine(app.handle())?;
             app.manage(Engine { child: Mutex::new(Some(child)), port });
             Ok(())
         })

@@ -27,6 +27,9 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .muted { color: var(--muted); font-weight: 400; }
 .error { display: flex; justify-content: space-between; gap: 12px; margin: 16px 32px 0; padding: 12px 16px; border-radius: 12px; background: #2a1520; border: 1px solid #6b3a48; color: #ffc2d4; white-space: pre-line; }
 .error button { background: none; border: 0; color: inherit; }
+.update { display: flex; align-items: center; gap: 12px; margin: 16px 32px 0; padding: 10px 16px; border-radius: 12px; background: #1b2632; border: 1px solid #2e4a63; color: #9ed9f2; }
+.update .primary { height: 36px; margin-left: auto; }
+.update button:not(.primary) { background: none; border: 0; color: var(--muted); }
 main { flex: 1; padding: 24px 32px; }
 main h2 { margin: 0 0 16px; font-size: 22px; }
 .empty { padding: 48px; border: 2px dashed #2c2f3b; border-radius: 16px; text-align: center; color: var(--muted); }
