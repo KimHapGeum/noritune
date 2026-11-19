@@ -3,13 +3,17 @@
   "identifier": "default",
   "description": "Capability for the main window",
   "windows": [
-    "main"
+    "main",
+    "tv"
   ],
   "permissions": [
     "core:default",
     "dialog:allow-open",
     "dialog:allow-ask",
     "updater:default",
-    "process:allow-restart"
+    "process:allow-restart",
+    "core:webview:allow-create-webview-window",
+    "core:window:allow-set-fullscreen",
+    "core:window:allow-close"
   ]
 }

@@ -3,11 +3,12 @@ import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { audioUrl, getLyrics, savePrefs, type Gender, type LyricLine, type Part, type Prefs, type Settings, type Song } from "./api";
 import Stage from "./Stage";
 import { interludeTarget, verseEnd } from "./verse";
+import { sendTv } from "./Tv";
 import LyricsEditor from "./LyricsEditor";
 import SignalsmithStretch from "./vendor/SignalsmithStretch.mjs";
 
 /** 지금 부르는 줄(크게, 부른 만큼 색이 차오름)과 다음 줄을 보여 준다. */
-function LyricsView({ lines, pos, state }: { lines: LyricLine[]; pos: number; state?: string }) {
+export function LyricsView({ lines, pos, state }: { lines: LyricLine[]; pos: number; state?: string }) {
   if (!lines.length) {
     const msg = state === "searching" || state === "off" ? "가사를 찾는 중이에요" : state === "generating" ? "가사를 만드는 중이에요" : "가사가 없어요";
     return <div className="lyrics-view empty">{msg}</div>;
@@ -63,8 +64,9 @@ const typingIn = (e: KeyboardEvent) => !!(e.target as HTMLElement).closest?.("in
 // shortcut: 키 엔진(Signalsmith 기본 설정) 지연을 2026-11-20 앱에서 잰 값(키와 상관없이 0.12초). 엔진 설정을 바꾸면 다시 잰다
 const ENGINE_LATENCY = 0.12;
 
-export default function Player({ song, settings, onSettings, lyricsRev, hasNext, onEnded, onError, onChanged }: {
+export default function Player({ song, settings, onSettings, lyricsRev, hasNext, onEnded, onError, onChanged, tv }: {
   song: Song; settings: Settings; onSettings: (s: Settings) => void; lyricsRev: number; hasNext: boolean; onEnded: () => void;
+  tv: { canShow: boolean; open: boolean; show: () => void; close: () => void };
   onError: (msg: string) => void; onChanged: () => void;
 }) {
   const separated = !!song.stems;
@@ -416,6 +418,12 @@ export default function Player({ song, settings, onSettings, lyricsRev, hasNext,
       evs.forEach((e) => window.removeEventListener(e, poke));
     };
   }, [playing, bgOpen, askGender, editing, hover, moreOpen, stageOpen]);
+  // TV 화면 (기획서 F14): TV에 띄우는 동안 PC 창은 조작 화면만 두고, 재생 상태를 TV 창으로 보낸다
+  useEffect(() => setStageOpen(!tv.open), [tv.open]);
+  useEffect(() => {
+    if (!tv.open) return;
+    sendTv({ song, settings, lines: lyrics, heardPos: heard, lyricPos, tempo, playing, lyricsOn, keyLabel: keyLabel(key, preset, gender) });
+  }, [tv.open, pos, playing, tempo, lyricsOn, lyrics, key, preset, song, settings]);
   const hideUi = idle && settings.auto_hide && playing && stageOpen && !bgOpen && !askGender && !editing && !hover && !moreOpen;
   const barHover = { onMouseEnter: () => setHover(true), onMouseLeave: () => setHover(false) };
 
@@ -491,7 +499,9 @@ export default function Player({ song, settings, onSettings, lyricsRev, hasNext,
         aria-label={playing ? "일시정지" : "재생"}>
         {playing ? "❚❚" : "▶"}
       </button>
-      {!stageOpen && <button className="next" onClick={() => setStageOpen(true)} title="노래방 화면 보기">노래방 화면</button>}
+      {!stageOpen && !tv.open && <button className="next" onClick={() => setStageOpen(true)} title="노래방 화면 보기">노래방 화면</button>}
+      {tv.open ? <button className="next" onClick={tv.close}>TV 끄기</button>
+        : tv.canShow && <button className="next" onClick={tv.show} title="두 번째 모니터에 노래방 화면 띄우기">TV에 띄우기</button>}
       {hasNext && <button className="next" onClick={onEnded} aria-label="다음 곡" title="다음 예약곡으로">⏭</button>}
       <div className="now">
         <b>{song.title}</b> <span className="muted">{song.artist}</span>

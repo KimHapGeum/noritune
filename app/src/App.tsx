@@ -6,6 +6,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { addSong, DEFAULT_SETTINGS, decideSong, getQueue, markPlayed, savePrefs, getSettings, putSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
 import Settings from "./Settings";
 import { setMic, startMic, stopMic } from "./Mic";
+import { sendTv, useTv } from "./Tv";
 import QueuePanel from "./QueuePanel";
 import Player from "./Player";
 import YoutubeDialog from "./YoutubeDialog";
@@ -67,6 +68,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsLoaded = useRef(false);
   const [micLatency, setMicLatency] = useState<number | null>(null);
+  const tv = useTv(setError);
   const [seen, setSeen] = useState(loadSeen);
   const markSeen = (id: string) => {
     const next = [...seen.filter((x) => x !== id), id].slice(-500);
@@ -214,6 +216,11 @@ export default function App() {
   }, [settings.mic_on, settings.mic_device]);
   useEffect(() => setMic(settings.mic_volume, settings.mic_echo), [settings.mic_volume, settings.mic_echo]);
 
+  // 부르는 곡이 없으면 TV는 기다림 화면
+  useEffect(() => {
+    if (tv.open && !playing) sendTv(null);
+  }, [tv.open, playing]);
+
   // 반주를 만드는 곡이 있는 동안 1.5초마다 상태를 새로 받는다
   const anyBusy = songs.some(busy);
   useEffect(() => {
@@ -359,7 +366,7 @@ export default function App() {
       <QueuePanel queue={queue} songs={songs} onChange={changeQueue} />
       </div>
 
-      {playing && <Player key={playing.n} song={songs.find((s) => s.id === playing.song.id) ?? playing.song} settings={settings} onSettings={setSettings} hasNext={queue.length > 0} onEnded={playNext} lyricsRev={lyricsRev} onError={setError} onChanged={refresh} />}
+      {playing && <Player key={playing.n} song={songs.find((s) => s.id === playing.song.id) ?? playing.song} settings={settings} onSettings={setSettings} hasNext={queue.length > 0} onEnded={playNext} lyricsRev={lyricsRev} onError={setError} onChanged={refresh} tv={tv} />}
       {lyricsFor && (
         <LyricsChooser song={lyricsFor} onClose={() => setLyricsFor(null)}
           onChanged={() => { refresh(); setLyricsRev((r) => r + 1); }}
