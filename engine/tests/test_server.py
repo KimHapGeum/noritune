@@ -546,3 +546,33 @@ def test_offline_and_low_disk_fail_with_clear_message(tmp_path, sample):
     wait(app2.state.worker)
     assert c2.get(f"/songs/{sid2}").json()["error"] == "저장 공간이 부족해요 (남은 공간 1.0GB)"
     assert c2.get("/system").json()["free"] == 1024**3
+
+
+def test_system_storage_and_trim(tmp_path):
+    app = create_app(tmp_path / "OneDrive" / "data", separators={"빠른 분리": fake_separate}, search=fake_search,
+                     download=fake_download, lyrics_search=fake_lyrics_search, auto_lyrics=fake_auto, gpu=lambda: "RTX 테스트")
+    c = TestClient(app)
+    sysinfo = c.get("/system?with_gpu=true").json()
+    assert sysinfo["gpu"] == "RTX 테스트" and sysinfo["synced"] is True  # OneDrive 안이면 경고
+    sid = c.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav"))}).json()["id"]
+    wait(app.state.worker)
+    st = c.get("/storage").json()
+    assert st["total"] > 0 and st["songs"][0]["stems"] is True
+    assert c.post("/storage/trim", json={"days": 30}).json()["songs"] == 0  # 방금 넣은 곡은 남긴다
+    app.state.worker.lib.update(sid, added_at="2020-01-01T00:00:00+00:00")
+    r = c.post("/storage/trim", json={"days": 30}).json()
+    assert r["songs"] == 1 and r["freed"] > 0
+    s = c.get(f"/songs/{sid}").json()
+    assert s["stems"] is None and s["mode"] == "원곡 그대로" and s["trimmed_from"] == "빠른 분리"
+
+
+def test_ytdlp_update_records_time(tmp_path):
+    app = create_app(tmp_path / "data", separators={"빠른 분리": fake_separate}, search=fake_search, download=fake_download,
+                     lyrics_search=fake_lyrics_search, auto_lyrics=fake_auto, update_downloader=lambda: "Updated yt-dlp to 2026.11.30")
+    c = TestClient(app)
+    assert c.get("/settings").json()["onboarded"] is False
+    assert c.post("/ytdlp/update").json()["message"].startswith("Updated")
+    checked = c.get("/settings").json()["ytdlp_checked"]
+    assert checked > 0
+    c.put("/settings", json={"ytdlp_checked": 0, "onboarded": True})  # 화면이 예전 값을 보내도
+    assert c.get("/settings").json()["ytdlp_checked"] == checked

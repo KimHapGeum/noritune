@@ -1,5 +1,6 @@
 """화면(Tauri)과 주고받는 로컬 HTTP 서버. 127.0.0.1 에만 연다."""
 import json
+import logging
 import os
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ from .library import MODES_READY, MODES_SEPARATE, Library, LibraryError
 from .lyrics_service import LyricsService
 from .worker import DetectFn, DownloadFn, SeparateFn, Worker
 
+log = logging.getLogger("karaoke_engine.server")
 SONG_ID = re.compile(r"^[0-9a-f]{32}$")
 # 배경으로 쓸 수 있는 내 파일 (기획서 F11 사용자 설정 배경화면)
 BG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".mp4", ".webm", ".mov", ".m4v"}
@@ -94,6 +96,8 @@ class Settings(BaseModel):
     mic_device: str = Field("", max_length=500)  # 비우면 Windows 기본 마이크
     mic_volume: int = Field(80, ge=0, le=150)
     mic_echo: int = Field(30, ge=0, le=100)
+    onboarded: bool = False  # 처음 켰을 때 안내를 봤는지 (기획서 F17)
+    ytdlp_checked: float = 0  # yt-dlp를 마지막으로 업데이트한 때 (유닉스 초, 기획서 F18: 일주일마다)
 
     @field_validator("bg_files")
     @classmethod
@@ -116,13 +120,14 @@ class SearchLyrics(BaseModel):
 
 def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, detect: DetectFn | None = None,
                search=None, download: DownloadFn | None = None, lyrics_search=None, auto_lyrics=None,
-               to_cpu=None, update_downloader=None, online=None, free_space=None) -> FastAPI:
+               to_cpu=None, update_downloader=None, online=None, free_space=None, gpu=None) -> FastAPI:
     if separators is None:  # 시험은 가짜를 넣는다. 진짜는 torch를 쓰므로 여기서만 불러온다
         from . import separate as real
 
         separators = {"빠른 분리": real.quick, "고품질 분리": real.hq}
         detect = real.singing_ratio
         to_cpu = real.use_cpu
+        gpu = real.gpu_name
     if search is None or download is None:
         from . import youtube
 
@@ -232,6 +237,8 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
 
     @app.put("/settings")
     def put_settings(body: Settings):
+        # ytdlp_checked는 처리기만 적는다: 화면이 예전 값으로 설정 전체를 보내도 되돌리지 않게
+        body = body.model_copy(update={"ytdlp_checked": load_settings().ytdlp_checked})
         write_json(settings_file, body.model_dump_json(indent=1))
         return body
 
@@ -382,12 +389,81 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
             lib.update(song_id, status="ready", progress=1.0)
         return lib.get(song_id)
 
+    gpu_cache: list = []
+
     @app.get("/system")
-    def system():
-        """저장 폴더와 남은 공간 (기획서 6장·8.1: 2GB 아래면 알린다)"""
+    def system(with_gpu: bool = False):
+        """저장 폴더와 남은 공간 (기획서 6장·8.1: 2GB 아래면 알린다). with_gpu면 그래픽카드도 (처음 안내용, 조금 느림)"""
         import shutil
 
-        return {"data_dir": str(lib.data_dir), "free": (free_space or (lambda: shutil.disk_usage(lib.data_dir).free))()}
+        info = {"data_dir": str(lib.data_dir), "free": (free_space or (lambda: shutil.disk_usage(lib.data_dir).free))(),
+                "synced": any(w in str(lib.data_dir).lower() for w in ("onedrive", "dropbox", "google drive", "icloud"))}
+        if with_gpu:
+            if not gpu_cache:
+                gpu_cache.append(gpu() if gpu else None)
+            info["gpu"] = gpu_cache[0]
+        return info
+
+    def folder_size(p: Path) -> int:
+        return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) if p.is_dir() else 0
+
+    @app.get("/storage")
+    def storage():
+        """곡별 사용량 (기획서 6장 저장 공간)"""
+        songs = [{"id": s["id"], "title": s["title"], "artist": s["artist"], "bytes": folder_size(lib.folder(s["id"])),
+                  "stems": bool(s.get("stems")), "last_played": s.get("last_played") or s.get("added_at")} for s in lib.list()]
+        return {"total": sum(x["bytes"] for x in songs), "songs": sorted(songs, key=lambda x: -x["bytes"])}
+
+    class Trim(BaseModel):
+        days: int = Field(ge=1, le=3650)
+
+    @app.post("/storage/trim")
+    def trim(body: Trim):
+        """오래 안 부른 곡의 반주만 지운다. 원곡은 남겨 '원곡 그대로'로 부를 수 있고, ⋯ 메뉴에서 다시 만들 수 있다"""
+        from datetime import datetime, timedelta, timezone
+
+        cut = (datetime.now(timezone.utc) - timedelta(days=body.days)).isoformat(timespec="seconds")
+        freed, count = 0, 0
+        for s in lib.list():
+            if not s.get("stems") or s["status"] in BUSY_NOW or (s.get("last_played") or s.get("added_at") or "") >= cut:
+                continue
+            folder = lib.folder(s["id"])
+            for f in s["stems"].values():
+                if (folder / f).exists():
+                    freed += (folder / f).stat().st_size
+                    (folder / f).unlink()
+            lib.update(s["id"], stems=None, mode="원곡 그대로", trimmed_from=s["mode"])
+            count += 1
+        return {"songs": count, "freed": freed}
+
+    @app.post("/ytdlp/update")
+    def ytdlp_update():
+        """yt-dlp 지금 업데이트 (설정 버튼, 기획서 F18)"""
+        import time
+
+        try:
+            msg = update_downloader() if update_downloader else ""
+        except Exception as e:
+            raise HTTPException(502, f"yt-dlp를 업데이트하지 못했어요: {e}") from None
+        s = load_settings()
+        write_json(settings_file, s.model_copy(update={"ytdlp_checked": time.time()}).model_dump_json(indent=1))
+        return {"message": msg}
+
+    # 켤 때: 일주일 넘게 yt-dlp를 업데이트하지 않았으면 뒤에서 조용히 한다 (기획서 F18)
+    def weekly_ytdlp():
+        import threading
+        import time
+
+        if update_downloader and time.time() - load_settings().ytdlp_checked > 7 * 86400:
+            threading.Thread(target=lambda: _quiet(ytdlp_update), daemon=True).start()
+
+    def _quiet(fn):
+        try:
+            fn()
+        except Exception:
+            log.exception("yt-dlp 정기 업데이트 실패")
+
+    app.state.weekly_ytdlp = weekly_ytdlp
 
     @app.post("/logs/open")
     def open_logs():

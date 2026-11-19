@@ -5,6 +5,7 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { addSong, DEFAULT_SETTINGS, decideSong, deleteSong, getSystem, remakeSong, getQueue, markPlayed, savePrefs, getSettings, putSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
 import Settings from "./Settings";
+import Onboarding from "./Onboarding";
 import { setMic, startMic, stopMic } from "./Mic";
 import { sendTv, useTv } from "./Tv";
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -442,7 +443,8 @@ export default function App() {
           onClose={(saved) => { setEditFor(null); if (saved) { refresh(); setLyricsRev((r) => r + 1); } }}
           onChooseOther={() => { setLyricsFor(editFor); setEditFor(null); }} />
       )}
-      {settingsOpen && <Settings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} micLatency={micLatency} />}
+      {!settings.onboarded && <Onboarding onDone={() => setSettings((s) => ({ ...s, onboarded: true }))} />}
+      {settingsOpen && <Settings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} micLatency={micLatency} onChanged={refresh} />}
       {ytOpen && <YoutubeDialog defaultMode={mode} onClose={() => setYtOpen(false)} onAdded={refresh} />}
     </div>
   );

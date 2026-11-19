@@ -39,6 +39,7 @@ def main() -> None:
     logging.getLogger().setLevel(logging.INFO)
 
     app = create_app(args.data_dir)
+    app.state.weekly_ytdlp()
     print(f"KARAOKE_ENGINE_READY port={port}", flush=True)
     log_level = os.environ.get("KARAOKE_ENGINE_LOG", "warning")  # 문제 찾을 때 info로
     uvicorn.Server(uvicorn.Config(app, log_level=log_level)).run(sockets=[sock])

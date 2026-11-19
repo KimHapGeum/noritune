@@ -97,9 +97,10 @@ export type Settings = {
   bg_files: string[]; bg_interval: 10 | 30 | 0; bg_dim: number;
   auto_hide: boolean;
   mic_on: boolean; mic_device: string; mic_volume: number; mic_echo: number;
+  onboarded: boolean; ytdlp_checked: number;
 };
 export const DEFAULT_SETTINGS: Settings = { lyrics_delay: 0, bg_mode: "mv", bg_mv_fallback: "default", bg_files: [], bg_interval: 10, bg_dim: 55, auto_hide: true,
-  mic_on: false, mic_device: "", mic_volume: 80, mic_echo: 30 };
+  mic_on: false, mic_device: "", mic_volume: 80, mic_echo: 30, onboarded: true, ytdlp_checked: 0 };
 /** 공식 뮤비 후보 (좋은 순). badMv: 틀 수 없던 것을 뺀다 */
 export const findMv = (id: string) => call<{ ids: string[] }>(`/songs/${id}/mv`).then((r) => r.ids);
 export const badMv = (id: string, vid: string) => post<{ ids: string[] }>(`/songs/${id}/mv/bad`, { queue: [vid] });
@@ -118,7 +119,12 @@ export const markPlayed = (id: string) => post<Song>(`/songs/${id}/played`);
 
 export const deleteSong = (id: string) => call<{ ok: boolean }>(`/songs/${id}`, { method: "DELETE" });
 export const remakeSong = (id: string, mode: Mode) => post<Song>(`/songs/${id}/remake`, { mode });
-export const getSystem = () => call<{ data_dir: string; free: number }>("/system");
+export const getSystem = (withGpu = false) =>
+  call<{ data_dir: string; free: number; synced: boolean; gpu?: string | null }>(`/system${withGpu ? "?with_gpu=true" : ""}`);
+export type StorageSong = { id: string; title: string; artist: string; bytes: number; stems: boolean; last_played?: string };
+export const getStorage = () => call<{ total: number; songs: StorageSong[] }>("/storage");
+export const trimStorage = (days: number) => post<{ songs: number; freed: number }>("/storage/trim", { days });
+export const updateYtdlp = () => post<{ message: string }>("/ytdlp/update");
 export const openLogs = () => post<{ path: string }>("/logs/open");
 
 export const retrySong = (id: string) => call<Song>(`/songs/${id}/retry`, { method: "POST" });

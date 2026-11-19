@@ -59,6 +59,16 @@ def use_cpu() -> None:
         pass
 
 
+def gpu_name() -> str | None:
+    """NVIDIA 그래픽카드 이름, 없으면 None (처음 켰을 때 안내, 기획서 F17)"""
+    try:
+        import torch
+
+        return torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+    except Exception:
+        return None
+
+
 def _gpu() -> bool:
     if _force_cpu:
         return False

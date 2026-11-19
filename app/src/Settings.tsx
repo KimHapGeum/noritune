@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
-import { openLogs, type Settings as S } from "./api";
+import { getStorage, getSystem, openLogs, trimStorage, updateYtdlp, type Settings as S, type StorageSong } from "./api";
 import { micLevel } from "./Mic";
 
 // licenses 폴더의 전문을 모두 보여 준다. 같은 폴더가 설치 파일의 licenses/ 로도 들어간다 (tauri.conf.json)
@@ -11,9 +11,36 @@ const NAMES: Record<string, string> = {
 };
 
 /** 설정 화면. 바꾸면 바로 적용하고 처리기에 저장한다. */
-export default function Settings({ settings, onChange, onClose, micLatency }: {
-  settings: S; onChange: (s: S) => void; onClose: () => void; micLatency: number | null;
+const size = (b: number) => (b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)}GB` : `${Math.round(b / 1024 ** 2)}MB`);
+
+export default function Settings({ settings, onChange, onClose, micLatency, onChanged }: {
+  settings: S; onChange: (s: S) => void; onClose: () => void; micLatency: number | null; onChanged: () => void;
 }) {
+  // 저장 공간 (기획서 6장)
+  const [store, setStore] = useState<{ total: number; songs: StorageSong[] } | null>(null);
+  const [sys, setSys] = useState<{ data_dir: string; free: number; synced: boolean } | null>(null);
+  const [trimDays, setTrimDays] = useState(180);
+  const [msg, setMsg] = useState("");
+  const loadStore = () => {
+    getStorage().then(setStore).catch(() => {});
+    getSystem().then(setSys).catch(() => {});
+  };
+  useEffect(loadStore, []);
+  async function trim() {
+    const r = await trimStorage(trimDays);
+    setMsg(r.songs ? `${r.songs}곡의 반주를 지워 ${size(r.freed)}를 비웠어요. 원곡은 남아 있어요.` : "지울 반주가 없어요.");
+    loadStore();
+    onChanged();
+  }
+  async function ytdlp() {
+    setMsg("yt-dlp를 업데이트하는 중…");
+    try {
+      const r = await updateYtdlp();
+      setMsg(`yt-dlp: ${r.message || "끝났어요"}`);
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  }
   const [version, setVersion] = useState("");
   const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
   const [level, setLevel] = useState(0);
@@ -149,6 +176,40 @@ export default function Settings({ settings, onChange, onClose, micLatency }: {
               <input type="range" min={0} max={90} step={5} value={settings.bg_dim} onChange={(e) => onChange({ ...settings, bg_dim: Number(e.target.value) })} />
             </label>
           </section>
+
+          <section>
+            <h3>저장 공간</h3>
+            {sys && <p className="ob-path">{sys.data_dir}</p>}
+            {sys?.synced && <p className="note warn">동기화 폴더(OneDrive 등) 안이에요. 용량이 커서 동기화에 부담이 될 수 있어요.</p>}
+            {store && sys && <p className="small-p">곡 {store.songs.length}개 · <b>{size(store.total)}</b> 사용 · 남은 공간 {size(sys.free)}</p>}
+            {store && store.songs.length > 0 && (
+              <ul className="bg-files">
+                {store.songs.slice(0, 8).map((x) => (
+                  <li key={x.id}><span>{x.title} <span className="muted">{x.artist}</span></span><span className="muted">{size(x.bytes)}</span></li>
+                ))}
+              </ul>
+            )}
+            <div className="row-label">
+              <select value={trimDays} onChange={(e) => setTrimDays(Number(e.target.value))} aria-label="기간">
+                <option value={30}>한 달</option>
+                <option value={90}>석 달</option>
+                <option value={180}>반년</option>
+                <option value={365}>1년</option>
+              </select>
+              넘게 안 부른 곡의 반주 지우기
+              <button className="text-btn" onClick={trim}>지우기</button>
+            </div>
+            <p className="muted small-p">원곡은 남겨서 '원곡 그대로'로 부를 수 있고, 곡 메뉴 ⋯에서 반주를 다시 만들 수 있어요.</p>
+          </section>
+
+          <section>
+            <h3>업데이트</h3>
+            <p className="muted small-p">유튜브가 자주 바뀌어서 yt-dlp는 일주일마다 알아서 업데이트해요.
+              {settings.ytdlp_checked > 0 && ` 마지막: ${new Date(settings.ytdlp_checked * 1000).toLocaleDateString("ko-KR")}`}</p>
+            <button className="text-btn" onClick={ytdlp}>yt-dlp 지금 업데이트</button>
+            <button className="text-btn" onClick={() => { onChange({ ...settings, onboarded: false }); onClose(); }}>처음 안내 다시 보기</button>
+          </section>
+          {msg && <p className="note" role="status">{msg}</p>}
 
           <section>
             <h3>정보</h3>
