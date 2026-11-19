@@ -340,3 +340,69 @@ def test_lyrics_sidecar_lrc_is_used(client, tmp_path):
 def test_karaoke_video_lyrics_off(client, sample):
     song = add_yt(client, "[TJ노래방] 우주를줄게 - 볼빨간사춘기 / TJ Karaoke").json()
     assert song["lyrics"]["state"] == "off"
+
+
+def test_lyrics_editor_saves(client, tmp_path):
+    LYRICS["cands"] = []
+    song = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "원곡 그대로"}).json()
+    sid = song["id"]
+    assert wait_lyrics(client, sid) == "none"
+    body = {"lines": [{"t": 12.345, "text": " 둘째 줄 "}, {"t": 3, "text": "첫 줄"}, {"t": 20, "text": "  "}]}
+    assert client.put(f"/songs/{sid}/lyrics", json=body).json()["lyrics"]["state"] == "manual"  # 없던 가사를 직접 씀
+    assert client.get(f"/songs/{sid}/lyrics").json()["lines"] == [{"t": 3.0, "text": "첫 줄"}, {"t": 12.35, "text": "둘째 줄"}]
+    assert client.put(f"/songs/{sid}/lyrics", json={"lines": [{"t": -1, "text": "x"}]}).status_code == 422
+    assert client.put(f"/songs/{sid}/lyrics", json={"lines": []}).json()["lyrics"]["state"] == "none"
+    assert client.get(f"/songs/{sid}/lyrics").json()["lines"] == []
+
+
+def test_lyrics_editor_keeps_source_and_waits_for_auto(client, tmp_path):
+    src = make_wav(tmp_path / "곡.wav")
+    (tmp_path / "곡.lrc").write_text("[00:05.00] 원래 가사" + chr(10), encoding="utf-8")
+    sid = client.post("/songs", json={"path": str(src), "mode": "원곡 그대로"}).json()["id"]
+    r = client.put(f"/songs/{sid}/lyrics", json={"lines": [{"t": 5.1, "text": "고친 가사"}]}).json()
+    assert r["lyrics"]["state"] == "file"  # 출처는 그대로
+    client.worker.lib.update(sid, lyrics={"state": "generating"})
+    r = client.put(f"/songs/{sid}/lyrics", json={"lines": [{"t": 1, "text": "x"}]})
+    assert r.status_code == 409  # 자동 생성이 끝나면 덮어써질 테니 막는다
+
+
+def test_prefs_are_remembered_per_song(client, tmp_path):
+    sid = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "원곡 그대로"}).json()["id"]
+    client.patch(f"/songs/{sid}/prefs", json={"key": -5, "preset": "male", "tempo": 1.1})
+    r = client.patch(f"/songs/{sid}/prefs", json={"guide": 30, "gender": "female"}).json()
+    assert r["prefs"] == {"key": -5, "preset": "male", "tempo": 1.1, "guide": 30} and r["gender"] == "female"
+    for bad in ({"key": 7}, {"tempo": 2}, {"gender": "x"}, {"lowpass": 4000}):
+        assert client.patch(f"/songs/{sid}/prefs", json=bad).status_code == 422
+
+
+def test_settings_saved_and_validated(tmp_path):
+    c, _ = make_client(tmp_path / "data")
+    assert c.get("/settings").json() == {"lyrics_delay": 0}
+    assert c.put("/settings", json={"lyrics_delay": 0.25}).json()["lyrics_delay"] == 0.25
+    assert c.put("/settings", json={"lyrics_delay": 5}).status_code == 422
+    (tmp_path / "data" / "settings.json").write_text("{깨짐", encoding="utf-8")
+    assert c.get("/settings").json() == {"lyrics_delay": 0}  # 깨진 파일은 기본값
+    c.put("/settings", json={"lyrics_delay": -0.1})
+    c2, _ = make_client(tmp_path / "data")  # 다시 켜도 남는다
+    assert c2.get("/settings").json() == {"lyrics_delay": -0.1}
+
+
+def test_queue_saved_and_reserved_song_made_first(tmp_path):
+    import threading
+    gate = threading.Event()
+    order = []
+
+    def slow_separate(src, out_dir, duration, on_progress):
+        gate.wait(5)  # 첫 곡을 붙잡아 두는 동안 나머지는 줄에서 기다린다
+        order.append(src.parent.name)
+        return fake_separate(src, out_dir, duration, on_progress)
+
+    c, w = make_client(tmp_path / "data", separate=slow_separate)
+    ids = [c.post("/songs", json={"path": str(make_wav(tmp_path / f"{n}.wav"))}).json()["id"] for n in "abc"]
+    assert c.put("/queue", json={"queue": [ids[2], ids[2]]}).json() == {"queue": [ids[2], ids[2]]}  # 같은 곡 두 번도 된다
+    gate.set()
+    wait(w)
+    assert order[1] == ids[2]  # 예약한 c가 b보다 먼저
+    assert c.put("/queue", json={"queue": ["0" * 32]}).status_code == 404
+    c2, _ = make_client(tmp_path / "data")
+    assert c2.get("/queue").json() == {"queue": [ids[2], ids[2]]}  # 다시 켜도 남는다

@@ -1,11 +1,15 @@
 """화면(Tauri)과 주고받는 로컬 HTTP 서버. 127.0.0.1 에만 연다."""
+import json
+import os
 import re
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from typing import Literal
+
+from pydantic import BaseModel, Field
 
 from .library import MODES_SEPARATE, Library, LibraryError
 from .lyrics_service import LyricsService
@@ -38,6 +42,36 @@ class AddYoutube(BaseModel):
 
 class ChooseLyrics(BaseModel):
     candidate_id: int
+
+
+class LyricLine(BaseModel):
+    t: float = Field(ge=0, le=6 * 3600)
+    text: str = Field(max_length=500)
+
+
+class SaveLyrics(BaseModel):
+    lines: list[LyricLine] = Field(max_length=5000)
+
+
+class Prefs(BaseModel):
+    """곡마다 기억하는 재생 설정 (기획서 F8~F10). 보낸 것만 바꾼다."""
+    gender: Literal["male", "female", "mixed"] | None = None  # 원곡 가수 성별
+    key: int | None = Field(None, ge=-6, le=6)
+    preset: Literal["orig", "male", "female"] | None = None
+    tempo: float | None = Field(None, ge=0.7, le=1.3)
+    guide: int | None = Field(None, ge=0, le=100)
+    chorus: int | None = Field(None, ge=0, le=150)
+    lowpass: Literal[0, 12000, 9000, 7000, 5000, 3500] | None = None
+    verb: int | None = Field(None, ge=0, le=100)
+
+
+class Settings(BaseModel):
+    """앱 설정 (모든 곡에 같이 쓴다). 새 항목은 기본값을 꼭 둔다: 예전 settings.json에는 없다."""
+    lyrics_delay: float = Field(0, ge=-2, le=2)  # 가사 시간 보정(초). +면 가사가 늦게 나온다
+
+
+class Queue(BaseModel):
+    queue: list[str] = Field(max_length=500)  # 곡 번호. 같은 곡을 두 번 예약해도 된다
 
 
 class SearchLyrics(BaseModel):
@@ -136,6 +170,69 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
             raise HTTPException(404, "그 가사 후보를 찾을 수 없어요") from None
         except ValueError as e:
             raise HTTPException(400, str(e)) from None
+        return lib.get(song_id)
+
+    settings_file = lib.data_dir / "settings.json"
+    queue_file = lib.data_dir / "queue.json"
+
+    def write_json(path: Path, text: str) -> None:
+        # 임시 파일에 다 쓴 뒤 바꿔치기: 쓰다가 꺼져도 기존 파일이 깨지지 않는다
+        tmp = path.with_suffix(".json.tmp")
+        tmp.write_text(text, encoding="utf-8")
+        lib._retry(lambda: os.replace(tmp, path))
+
+    def load_settings() -> Settings:
+        try:
+            return Settings(**json.loads(lib._retry(lambda: settings_file.read_text(encoding="utf-8"))))
+        except (FileNotFoundError, ValueError):  # 없거나 깨졌으면 기본값
+            return Settings()
+
+    @app.get("/settings")
+    def get_settings():
+        return load_settings()
+
+    @app.put("/settings")
+    def put_settings(body: Settings):
+        write_json(settings_file, body.model_dump_json(indent=1))
+        return body
+
+    # 예약 목록 (기획서 F7, 11.6): 화면이 아니라 처리기가 들고 있어야 나중에 손님 휴대폰과 나눠 볼 수 있다
+    def load_queue() -> list[str]:
+        try:
+            ids = json.loads(lib._retry(lambda: queue_file.read_text(encoding="utf-8")))["queue"]
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            return []
+        known = {s["id"] for s in lib.list()}
+        return [i for i in ids if i in known]
+
+    @app.get("/queue")
+    def get_queue():
+        return {"queue": load_queue()}
+
+    @app.put("/queue")
+    def put_queue(body: Queue):
+        for i in body.queue:
+            find(i)  # 없는 곡은 404
+        write_json(queue_file, json.dumps({"queue": body.queue}))
+        worker.prioritize([i for i in body.queue if lib.get(i)["status"] == "queued"])
+        return {"queue": body.queue}
+
+    @app.patch("/songs/{song_id}/prefs")
+    def save_prefs(song_id: str, body: Prefs):
+        s = find(song_id)
+        new = body.model_dump(exclude_unset=True, exclude_none=True)
+        fields = {"prefs": {**(s.get("prefs") or {}), **{k: v for k, v in new.items() if k != "gender"}}}
+        if "gender" in new:
+            fields["gender"] = new["gender"]
+        return lib.update(song_id, **fields)
+
+    @app.put("/songs/{song_id}/lyrics")
+    def lyrics_save(song_id: str, body: SaveLyrics):
+        find(song_id)
+        try:
+            lyr.save(song_id, [x.model_dump() for x in body.lines])
+        except ValueError as e:
+            raise HTTPException(409, str(e)) from None
         return lib.get(song_id)
 
     @app.post("/songs/{song_id}/lyrics/search")

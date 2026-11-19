@@ -7,6 +7,10 @@
 - 업데이트 서명 열쇠: `~/.tauri/noritune.key` (공개 열쇠는 `tauri.conf.json`의 `plugins.updater.pubkey`)
 - **저장소에 절대 올리지 않는다.** 잃어버리면 이미 설치된 앱에 업데이트를 보낼 수 없으니 따로 백업해 둔다.
 
+## 오픈 소스 라이선스
+- 남의 코드를 앱에 넣으면 라이선스 전문을 세 곳에 둔다: `app/src/licenses/<이름>.txt`(앱 설정 → 정보, 설치 폴더 `licenses/`로 자동 포함), `README.md`의 "오픈 소스 라이선스", `Settings.tsx`의 `NAMES`(보이는 이름)
+- 전문은 원본 저장소의 LICENSE 파일을 그대로 받아 쓴다 (요약하거나 옮겨 적지 않는다)
+
 ## 순서
 1. 버전 올리기: `app/src-tauri/tauri.conf.json`, `app/src-tauri/Cargo.toml`, `app/package.json`의 `version`
 2. 처리기 묶기 (`engine/`에서, 가상환경은 `UV_PROJECT_ENVIRONMENT=~/.venvs/karaoke-engine`):
@@ -15,6 +19,7 @@
    `$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content ~/.tauri/noritune.key -Raw; $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ''; npx tauri build`
    → `~/.cache/karaoke/target/release/bundle/nsis/Noritune_<버전>_x64-setup.exe` 와 `.sig`
 4. 설치해 보고 곡 추가·재생 확인 (`/S`로 조용히 설치, `uninstall.exe /S`로 지우기)
+   설치 폴더에 `licenses/`(라이선스 전문)가 있는지, 앱 설정 → 정보에 라이선스가 보이는지 확인
 5. `python scripts/make_latest_json.py <버전> "<바뀐 내용>" <설치파일.exe> latest.json`
 6. 공개 저장소에 릴리스: `gh release create v<버전> <설치파일.exe> latest.json -R KimHapGeum/noritune-update -t "Noritune <버전>" -n "<바뀐 내용>"`
    설치 파일과 latest.json을 같은 릴리스에 함께 올린다 (latest.json의 주소가 그 릴리스를 가리킨다)

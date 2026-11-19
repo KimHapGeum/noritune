@@ -44,6 +44,14 @@ class Worker:
         self.lib.update(song_id, status="queued", progress=0.0, error=None)
         self.q.put(song_id)
 
+    def prioritize(self, song_ids: list[str]) -> None:
+        """예약한 곡을 기다리는 줄 맨 앞으로 (예약 순서대로). 기획서 F3: 예약한 곡을 먼저 만든다."""
+        with self.q.mutex:
+            for sid in reversed(song_ids):
+                if sid in self.q.queue:
+                    self.q.queue.remove(sid)
+                    self.q.queue.appendleft(sid)
+
     def enqueue_lyrics(self, song_id: str) -> None:
         """음성 인식으로 가사 만들기. 그래픽카드를 쓰므로 분리와 같은 줄에 선다."""
         self.lib.update(song_id, lyrics={"state": "generating"})

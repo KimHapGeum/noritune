@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { audioUrl, getLyrics, type LyricLine, type Part, type Song } from "./api";
+import { audioUrl, getLyrics, savePrefs, type Gender, type LyricLine, type Part, type Prefs, type Song } from "./api";
+import LyricsEditor from "./LyricsEditor";
+import SignalsmithStretch from "./vendor/SignalsmithStretch.mjs";
 
 /** 지금 부르는 줄(크게, 부른 만큼 색이 차오름)과 다음 줄을 보여 준다. */
 function LyricsView({ lines, pos, state }: { lines: LyricLine[]; pos: number; state?: string }) {
@@ -31,40 +33,80 @@ function LyricsView({ lines, pos, state }: { lines: LyricLine[]; pos: number; st
 }
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+type Preset = NonNullable<Prefs["preset"]>;
+
+/** 프리셋이 원키에서 몇 키 옮기는지 (기획서 F8): 여자 노래의 남자키 -5, 남자 노래의 여자키 +5, 같은 성별·혼성은 0 */
+export function presetOffset(preset: Preset, gender?: Gender): number {
+  if (preset === "male" && gender === "female") return -5;
+  if (preset === "female" && gender === "male") return 5;
+  return 0;
+}
+
+/** `원키`, `♯2`, `♭3`, `남자키`, `남자키 ♯1` */
+export function keyLabel(key: number, preset: Preset, gender?: Gender): string {
+  const off = presetOffset(preset, gender);
+  const name = off === 0 ? "" : preset === "male" ? "남자키" : "여자키";
+  const d = key - off;
+  const sym = d > 0 ? `♯${d}` : d < 0 ? `♭${-d}` : "";
+  return name ? (sym ? `${name} ${sym}` : name) : sym || "원키";
+}
+
+const typingIn = (e: KeyboardEvent) => !!(e.target as HTMLElement).closest?.("input, textarea, select, [role=dialog]");
 
 /**
- * 재생기. 분리한 곡은 반주 + 가이드 보컬을 Web Audio로 섞어 틀고, 원곡으로 바꿔 들을 수도 있다.
- * 모든 소리는 gain → out 으로 모인다 (다음 단계에서 out 뒤에 키·속도 엔진을 넣는다).
+ * 재생기. 분리한 곡은 반주 + 가이드 보컬 + 코러스를 Web Audio로 섞는다.
+ * 모든 소리 → bus → Signalsmith Stretch(키) → 스피커. 속도는 재생 속도로 바꾸고, 그만큼 바뀐 음높이를 키 엔진이 되돌린다.
  */
-export default function Player({ song, onError }: { song: Song; onError: (msg: string) => void }) {
+// shortcut: 키 엔진(Signalsmith 기본 설정) 지연을 2026-11-20 앱에서 잰 값(키와 상관없이 0.12초). 엔진 설정을 바꾸면 다시 잰다
+const ENGINE_LATENCY = 0.12;
+
+export default function Player({ song, lyricsRev, lyricsDelay, hasNext, onEnded, onError, onChanged }: {
+  song: Song; lyricsRev: number; lyricsDelay: number; hasNext: boolean; onEnded: () => void;
+  onError: (msg: string) => void; onChanged: () => void;
+}) {
   const separated = !!song.stems;
   const hasChorus = !!song.stems?.chorus;
+  const p = song.prefs ?? {};
   const [track, setTrack] = useState<"inst" | "orig">(separated ? "inst" : "orig");
-  // 기획서 F10 기본값 (시험에서 가장 자연스러웠던 값)
-  const [guide, setGuide] = useState(15);
-  const [chorus, setChorus] = useState(50);
-  const [lowpass, setLowpass] = useState(5000);
-  const [verb, setVerb] = useState(20);
+  // 기획서 F10 기본값 (시험에서 가장 자연스러웠던 값). 곡마다 마지막 설정을 기억한다
+  const [guide, setGuide] = useState(p.guide ?? 15);
+  const [chorus, setChorus] = useState(p.chorus ?? 50);
+  const [lowpass, setLowpass] = useState(p.lowpass ?? 5000);
+  const [verb, setVerb] = useState(p.verb ?? 20);
+  const [key, setKey] = useState(p.key ?? 0);
+  const [preset, setPreset] = useState<Preset>(p.preset ?? "orig");
+  const [tempo, setTempo] = useState(p.tempo ?? 1);
+  const [gender, setGender] = useState<Gender | undefined>(song.gender);
+  const [askGender, setAskGender] = useState<Preset | null>(null); // 성별을 몰라 물어보는 중인 프리셋
   const [playing, setPlaying] = useState(false);
   const [pos, setPos] = useState(0);
   const [loading, setLoading] = useState(true);
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+  const [editing, setEditing] = useState<{ at: number; resume: boolean } | null>(null);
+  const [rev, setRev] = useState(0);
+  const [latency, setLatency] = useState(0); // 소리가 실제로 들리기까지 (키 엔진 + 스피커)
 
   // 가사는 곡을 고를 때와, 가사를 고르거나 만들어 상태가 바뀔 때 다시 받는다
   useEffect(() => {
     getLyrics(song.id).then((r) => setLyrics(r.lines)).catch(() => setLyrics([]));
-  }, [song.id, song.lyrics?.state, song.lyrics?.candidate_id]);
+  }, [song.id, song.lyrics?.state, song.lyrics?.candidate_id, lyricsRev, rev]);
 
   const ctx = useRef<AudioContext | null>(null);
   const bufs = useRef<Partial<Record<Part, AudioBuffer>>>({});
   const gains = useRef<Partial<Record<Part, GainNode>>>({});
   const srcs = useRef<AudioBufferSourceNode[]>([]);
-  // 코러스: gain → 고음 깎기 → (그대로 + 울림) → 스피커. 휘파람 같은 흠과 낮아지는 구간을 가린다
+  const bus = useRef<GainNode | null>(null);
+  const stretch = useRef<Awaited<ReturnType<typeof SignalsmithStretch>> | null>(null);
+  // 코러스: gain → 고음 깎기 → (그대로 + 울림) → bus. 휘파람 같은 흠과 낮아지는 구간을 가린다
   const chain = useRef<{ input: GainNode; lp: BiquadFilterNode; wet: GainNode } | null>(null);
-  const startedAt = useRef(0); // ctx 시간 기준으로 곡 0초였던 때
+  const base = useRef(0); // 재생을 시작(또는 속도를 바꾼) 때의 곡 위치
+  const startedAt = useRef(0); // 그때의 ctx 시간
+  const rate = useRef(tempo); // 지금 소리에 걸린 속도
   const offset = useRef(0); // 멈춰 있을 때의 위치
+  const endedRef = useRef(onEnded);
+  endedRef.current = onEnded;
 
-  const now = () => (playing && ctx.current ? ctx.current.currentTime - startedAt.current : offset.current);
+  const now = () => (playing && ctx.current ? base.current + (ctx.current.currentTime - startedAt.current) * rate.current : offset.current);
   const duration = bufs.current.instrumental?.duration ?? bufs.current.original?.duration ?? song.duration;
 
   async function load(part: Part) {
@@ -73,15 +115,15 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
     const data = await (await fetch(await audioUrl(song.id, part))).arrayBuffer();
     bufs.current[part] = await c.decodeAudioData(data);
     const g = c.createGain();
-    g.connect(part === "chorus" ? chain.current!.input : c.destination);
+    g.connect(part === "chorus" ? chain.current!.input : bus.current!);
     gains.current[part] = g;
   }
 
-  function makeChorusChain(c: AudioContext) {
+  function makeChorusChain(c: AudioContext, out: AudioNode) {
     const input = c.createGain();
     const lp = c.createBiquadFilter();
     lp.type = "lowpass";
-    input.connect(lp).connect(c.destination);
+    input.connect(lp).connect(out);
     // 간단한 리버브: 1.8초 동안 작아지는 잡음을 울림 응답으로 쓴다
     const n = Math.floor(c.sampleRate * 1.8);
     const ir = c.createBuffer(2, n, c.sampleRate);
@@ -92,7 +134,7 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
     const conv = c.createConvolver();
     conv.buffer = ir;
     const wet = c.createGain();
-    lp.connect(conv).connect(wet).connect(c.destination);
+    lp.connect(conv).connect(wet).connect(out);
     chain.current = { input, lp, wet };
   }
 
@@ -109,6 +151,9 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
     }
   }
 
+  // 재생 속도만큼 올라간(내려간) 음을 되돌리고 원하는 키를 더한다
+  const applyPitch = () => void stretch.current?.schedule({ semitones: key - 12 * Math.log2(tempo) });
+
   function stopSources() {
     srcs.current.forEach((s) => {
       s.onended = null;
@@ -123,6 +168,7 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
     for (const [part, buf] of Object.entries(bufs.current) as [Part, AudioBuffer][]) {
       const s = c.createBufferSource();
       s.buffer = buf;
+      s.playbackRate.value = rate.current;
       s.connect(gains.current[part]!);
       s.start(0, Math.min(at, buf.duration));
       srcs.current.push(s);
@@ -131,8 +177,10 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
       setPlaying(false);
       offset.current = 0;
       setPos(0);
+      endedRef.current(); // 예약한 다음 곡으로
     };
-    startedAt.current = c.currentTime - at;
+    base.current = at;
+    startedAt.current = c.currentTime;
     setPlaying(true);
   }
 
@@ -158,18 +206,32 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
     setPos(0);
     setTrack(separated ? "inst" : "orig");
     setLoading(true);
-    makeChorusChain(c);
+    bus.current = c.createGain();
+    makeChorusChain(c, bus.current);
+    const engine = SignalsmithStretch(c)
+      .then(async (node) => {
+        bus.current!.connect(node).connect(c.destination);
+        await node.start();
+        stretch.current = node;
+      })
+      .catch((e) => {
+        bus.current!.connect(c.destination); // 키·속도 없이라도 부를 수 있게
+        onError(`키·속도 조절을 켜지 못했어요: ${e?.message ?? e}`);
+      });
     const parts: Part[] = !separated ? ["original"] : hasChorus ? ["instrumental", "vocals", "chorus"] : ["instrumental", "vocals"];
-    Promise.all(parts.map(load))
+    Promise.all([engine, ...parts.map(load)])
       .then(() => {
         if (ctx.current !== c) return;
         setLoading(false);
         applyGains();
+        applyPitch();
         start(0);
+        setLatency((stretch.current ? ENGINE_LATENCY : 0) + (c.outputLatency || c.baseLatency || 0));
       })
       .catch((e) => onError(`소리를 불러오지 못했어요: ${e.message ?? e}`));
     return () => {
       stopSources();
+      stretch.current = null;
       c.close();
     };
   }, [song.id]);
@@ -188,19 +250,115 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
     } else applyGains();
   }, [track, guide, chorus, lowpass, verb, loading]);
 
+  // 속도를 바꾸면 위치 계산 기준을 지금으로 옮기고 소리의 재생 속도를 바꾼다. 멈추거나 처음으로 가지 않는다
+  useEffect(() => {
+    if (playing && ctx.current) {
+      base.current = now();
+      startedAt.current = ctx.current.currentTime;
+    }
+    rate.current = tempo;
+    srcs.current.forEach((s) => (s.playbackRate.value = tempo));
+    applyPitch();
+  }, [tempo]);
+  useEffect(applyPitch, [key]);
+
+  // 키·속도·소리 섞기를 곡마다 기억한다 (0.6초 동안 더 바꾸지 않으면 저장)
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) return void (first.current = false);
+    const t = setTimeout(() => savePrefs(song.id, { key, preset, tempo, guide, chorus, lowpass, verb }).then(onChanged).catch(() => {}), 600);
+    return () => clearTimeout(t);
+  }, [key, preset, tempo, guide, chorus, lowpass, verb]);
+
   useEffect(() => {
     const t = setInterval(() => setPos(now()), 100);
     return () => clearInterval(t);
   }, [playing]);
 
+  const changeKey = (d: number) => setKey((k) => Math.max(-6, Math.min(6, k + d)));
+  function choosePreset(pr: Preset, g = gender) {
+    if (pr !== "orig" && !g) return setAskGender(pr);
+    const off = presetOffset(pr, g);
+    setPreset(off === 0 ? "orig" : pr);
+    setKey(off);
+  }
+  function answerGender(g: Gender) {
+    setGender(g);
+    savePrefs(song.id, { gender: g }).then(onChanged).catch(() => {});
+    const pr = askGender!;
+    setAskGender(null);
+    choosePreset(pr, g);
+  }
+
+  // 가사 고치기 (기획서 F5): 멈추고 지금 줄에서 편집기를 연다. 닫으면 그 위치에서 이어 부른다
+  function openEditor() {
+    const resume = playing;
+    if (playing) pause();
+    setEditing({ at: offset.current, resume });
+  }
+
+  // 단축키: 키 올림 ↑/+, 내림 ↓/-, 원키 0, 가사 고치기 E
+  const keyRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  keyRef.current = (e) => {
+    if (editing || loading || e.ctrlKey || e.altKey || e.metaKey || typingIn(e)) return;
+    if (e.key === "ArrowUp" || e.key === "+") changeKey(1);
+    else if (e.key === "ArrowDown" || e.key === "-") changeKey(-1);
+    else if (e.key === "0") choosePreset("orig");
+    else if ((e.key === "e" || e.key === "E") && song.lyrics?.state !== "off") openEditor();
+    else return;
+    e.preventDefault();
+  };
+  useEffect(() => {
+    const on = (e: KeyboardEvent) => keyRef.current(e);
+    window.addEventListener("keydown", on);
+    return () => window.removeEventListener("keydown", on);
+  }, []);
+
   return (
     <>
-    <LyricsView lines={lyrics} pos={pos} state={song.lyrics?.state} />
+    {/* 가사는 들리는 소리에 맞춘다: 들리기까지의 지연(곡 시간으로는 속도만큼)과 사용자 보정을 뺀다 */}
+    <LyricsView lines={lyrics} pos={Math.max(0, pos - latency * tempo - lyricsDelay)} state={song.lyrics?.state} />
+    {song.lyrics?.state !== "off" && (
+      <div className="lyr-tools"><button onClick={openEditor} disabled={loading} title="단축키 E">가사 고치기</button></div>
+    )}
+    {editing && (
+      <LyricsEditor song={song} startAt={editing.at}
+        onClose={(saved) => {
+          if (saved) setRev((r) => r + 1);
+          if (editing.resume) start(offset.current);
+          setEditing(null);
+        }} />
+    )}
     <footer className="player">
+      <div className="ctl-group" role="group" aria-label="키 조절">
+        <div className="stepper">
+          <button onClick={() => changeKey(-1)} disabled={key <= -6} aria-label="키 내림" title="↓ 또는 -">−</button>
+          <b className="stepper-val" aria-live="polite">{keyLabel(key, preset, gender)}</b>
+          <button onClick={() => changeKey(1)} disabled={key >= 6} aria-label="키 올림" title="↑ 또는 +">+</button>
+        </div>
+        <div className="presets">
+          {(["orig", "male", "female"] as const).map((pr) => (
+            <button key={pr} onClick={() => choosePreset(pr)} title={pr === "orig" ? "단축키 0" : ""}
+              className={preset === pr && (pr !== "orig" || key === 0) ? "on" : ""}>
+              {pr === "orig" ? "원키" : pr === "male" ? "남자키" : "여자키"}
+            </button>
+          ))}
+        </div>
+        {askGender && (
+          <div className="ask-gender" role="group" aria-label="원곡 가수 성별">
+            <span>원곡 가수는요?</span>
+            <button onClick={() => answerGender("male")}>남자</button>
+            <button onClick={() => answerGender("female")}>여자</button>
+            <button onClick={() => answerGender("mixed")}>혼성</button>
+            <button className="muted" onClick={() => setAskGender(null)} aria-label="취소">✕</button>
+          </div>
+        )}
+      </div>
       <button className="play" onClick={() => (playing ? pause() : start(offset.current))} disabled={loading}
         aria-label={playing ? "일시정지" : "재생"}>
         {playing ? "❚❚" : "▶"}
       </button>
+      {hasNext && <button className="next" onClick={onEnded} aria-label="다음 곡" title="다음 예약곡으로">⏭</button>}
       <div className="now">
         <b>{song.title}</b> <span className="muted">{song.artist}</span>
         <div className="seek">
@@ -248,6 +406,16 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
         </>
       )}
       {loading && <span className="muted">불러오는 중…</span>}
+      <div className="ctl-group" role="group" aria-label="속도 조절">
+        <div className="stepper">
+          <button onClick={() => setTempo((t) => Math.max(0.7, Math.round((t - 0.05) * 100) / 100))} disabled={tempo <= 0.7} aria-label="속도 내림">−</button>
+          <b className="stepper-val">{tempo === 1 ? "원래 속도" : `${tempo.toFixed(2)}배`}</b>
+          <button onClick={() => setTempo((t) => Math.min(1.3, Math.round((t + 0.05) * 100) / 100))} disabled={tempo >= 1.3} aria-label="속도 올림">+</button>
+        </div>
+        <div className="presets">
+          <button onClick={() => setTempo(1)} className={tempo === 1 ? "on" : ""}>원래 속도</button>
+        </div>
+      </div>
     </footer>
     </>
   );

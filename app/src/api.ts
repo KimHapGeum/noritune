@@ -17,6 +17,13 @@ export type Song = {
   progress?: number;
   error?: string | null;
   stems?: { instrumental: string; vocals: string; chorus?: string };
+  gender?: Gender;
+  prefs?: Prefs;
+};
+export type Gender = "male" | "female" | "mixed";
+export type Prefs = {
+  key?: number; preset?: "orig" | "male" | "female"; tempo?: number;
+  guide?: number; chorus?: number; lowpass?: number; verb?: number;
 };
 
 let base: Promise<string> | null = null;
@@ -35,7 +42,7 @@ export const listSongs = () => call<{ songs: Song[] }>("/songs").then((r) => r.s
 export const addSong = (path: string, mode: Mode) =>
   call<Song>("/songs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, mode }) });
 
-export type LyricsState = "searching" | "review" | "internet" | "generating" | "auto" | "file" | "none" | "off";
+export type LyricsState = "searching" | "review" | "internet" | "generating" | "auto" | "file" | "none" | "off" | "manual";
 export type LyricLine = { t: number; text: string };
 export type LyricsCandidate = {
   id: number; title: string; artist: string; album: string; duration: number; diff: number | null;
@@ -49,6 +56,8 @@ export const getLyrics = (id: string) => call<{ state: LyricsState; lines: Lyric
 export const getCandidates = (id: string) => call<{ candidates: LyricsCandidate[] }>(`/songs/${id}/lyrics/candidates`).then((r) => r.candidates);
 export const chooseLyrics = (id: string, candidateId: number) => post<Song>(`/songs/${id}/lyrics/choose`, { candidate_id: candidateId });
 export const autoLyrics = (id: string) => post<Song>(`/songs/${id}/lyrics/auto`);
+export const saveLyrics = (id: string, lines: LyricLine[]) =>
+  call<Song>(`/songs/${id}/lyrics`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lines }) });
 export const searchLyricsAgain = (id: string, title: string, artist: string) => post<Song>(`/songs/${id}/lyrics/search`, { title, artist });
 
 export type YtResult = {
@@ -68,6 +77,21 @@ export const addYoutube = (body: {
   id: string; video_title: string; title: string; artist: string; duration: number; mode: Mode;
   lyrics_in_video?: "yes" | "no" | "unknown";
 }) => call<Song>("/songs/youtube", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+/** 곡마다 기억하는 키·속도·소리 섞기, 원곡 가수 성별 */
+export const savePrefs = (id: string, body: Prefs & { gender?: Gender }) =>
+  call<Song>(`/songs/${id}/prefs`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+/** 앱 설정 (모든 곡에 같이 쓴다) */
+export type Settings = { lyrics_delay: number };
+export const getSettings = () => call<Settings>("/settings");
+export const putSettings = (body: Settings) =>
+  call<Settings>("/settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+/** 예약 목록 (곡 번호 줄) */
+export const getQueue = () => call<{ queue: string[] }>("/queue").then((r) => r.queue);
+export const putQueue = (queue: string[]) =>
+  call<{ queue: string[] }>("/queue", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queue }) });
 
 export const retrySong = (id: string) => call<Song>(`/songs/${id}/retry`, { method: "POST" });
 

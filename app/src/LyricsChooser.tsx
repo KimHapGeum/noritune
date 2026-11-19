@@ -5,7 +5,9 @@ const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).p
 const AUTO = -1; // 목록 맨 밑 "가사 자동 생성"
 
 /** 가사 후보 고르기 (기획서 F4). 후보가 모두 별로면 맨 밑의 자동 생성을 고른다. */
-export default function LyricsChooser({ song, onClose, onChanged }: { song: Song; onClose: () => void; onChanged: () => void }) {
+export default function LyricsChooser({ song, onClose, onChanged, onEdit }: {
+  song: Song; onClose: () => void; onChanged: () => void; onEdit: () => void;
+}) {
   const [cands, setCands] = useState<LyricsCandidate[] | null>(null);
   const [pick, setPick] = useState<number | null>(song.lyrics?.candidate_id ?? null);
   const [title, setTitle] = useState(song.title);
@@ -121,6 +123,7 @@ export default function LyricsChooser({ song, onClose, onChanged }: { song: Song
         </div>
         {err && <div className="error inline" role="alert">{err}</div>}
         <div className="dialog-foot">
+          <button onClick={onEdit} style={{ marginRight: "auto" }}>지금 가사 직접 고치기</button>
           <button onClick={onClose}>취소</button>
           <button className="primary" onClick={apply} disabled={pick === null || busy}>
             {pick === AUTO ? "자동 생성으로 만들기" : "이 가사로 바꾸기"}

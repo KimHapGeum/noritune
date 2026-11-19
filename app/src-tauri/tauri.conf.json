@@ -37,7 +37,8 @@
     ],
     "createUpdaterArtifacts": true,
     "resources": {
-      "C:/Users/osj00/.cache/karaoke/pyinstaller/dist/noritune-engine/": "engine/"
+      "C:/Users/osj00/.cache/karaoke/pyinstaller/dist/noritune-engine/": "engine/",
+      "../src/licenses/": "licenses/"
     },
     "windows": {
       "nsis": {

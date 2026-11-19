@@ -81,3 +81,20 @@ class LyricsService:
     def lines(self, song_id: str) -> list[dict]:
         lrc = self._paths(song_id)[0]
         return parse_lrc(lrc.read_text(encoding="utf-8")) if lrc.exists() else []
+
+    def save(self, song_id: str, lines: list[dict]) -> None:
+        """가사 편집기에서 고친 가사를 저장한다 (기획서 F5). 빈 목록이면 가사를 지운다."""
+        state = (self.lib.get(song_id).get("lyrics") or {}).get("state")
+        if state == "generating":
+            raise ValueError("가사를 만드는 중이에요. 다 만든 뒤에 고쳐 주세요")
+        lrc = self._paths(song_id)[0]
+        lines = sorted(({"t": round(x["t"], 2), "text": x["text"].strip()} for x in lines if x["text"].strip()),
+                       key=lambda x: x["t"])
+        if not lines:
+            lrc.unlink(missing_ok=True)
+            self.lib.update(song_id, lyrics={"state": "none"})
+            return
+        lrc.write_text(to_lrc(lines), encoding="utf-8")
+        # 인터넷·자동·파일 가사는 고쳐도 출처를 그대로 둔다. 없던 가사를 직접 쓰면 manual
+        if state in (None, "none", "review", "searching", "off"):
+            self.lib.update(song_id, lyrics={"state": "manual"})
