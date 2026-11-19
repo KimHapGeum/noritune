@@ -10,7 +10,10 @@ export type Song = {
   artist: string;
   duration: number;
   mode: Mode;
-  status: "ready" | "queued" | "checking" | "confirm" | "separating" | "failed";
+  status: "ready" | "queued" | "downloading" | "checking" | "confirm" | "separating" | "failed";
+  app_lyrics?: boolean;
+  lyrics?: { state: LyricsState; candidate_id?: number | null; error?: string };
+  video?: string | null;
   progress?: number;
   error?: string | null;
   stems?: { instrumental: string; vocals: string; chorus?: string };
@@ -31,6 +34,40 @@ export const listSongs = () => call<{ songs: Song[] }>("/songs").then((r) => r.s
 
 export const addSong = (path: string, mode: Mode) =>
   call<Song>("/songs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, mode }) });
+
+export type LyricsState = "searching" | "review" | "internet" | "generating" | "auto" | "file" | "none" | "off";
+export type LyricLine = { t: number; text: string };
+export type LyricsCandidate = {
+  id: number; title: string; artist: string; album: string; duration: number; diff: number | null;
+  synced: boolean; lines: LyricLine[]; plain: string; recommended: boolean;
+};
+
+const post = <T,>(path: string, body?: unknown) =>
+  call<T>(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body ?? {}) });
+
+export const getLyrics = (id: string) => call<{ state: LyricsState; lines: LyricLine[] }>(`/songs/${id}/lyrics`);
+export const getCandidates = (id: string) => call<{ candidates: LyricsCandidate[] }>(`/songs/${id}/lyrics/candidates`).then((r) => r.candidates);
+export const chooseLyrics = (id: string, candidateId: number) => post<Song>(`/songs/${id}/lyrics/choose`, { candidate_id: candidateId });
+export const autoLyrics = (id: string) => post<Song>(`/songs/${id}/lyrics/auto`);
+export const searchLyricsAgain = (id: string, title: string, artist: string) => post<Song>(`/songs/${id}/lyrics/search`, { title, artist });
+
+export type YtResult = {
+  id: string;
+  title: string;
+  channel: string;
+  duration: number;
+  thumbnail: string;
+  kind: "karaoke" | "mr" | "inst" | "normal";
+  guess: { title: string; artist: string };
+};
+
+export const searchYoutube = (q: string, karaokeOnly: boolean) =>
+  call<{ results: YtResult[] }>(`/youtube/search?q=${encodeURIComponent(q)}&karaoke_only=${karaokeOnly}`).then((r) => r.results);
+
+export const addYoutube = (body: {
+  id: string; video_title: string; title: string; artist: string; duration: number; mode: Mode;
+  lyrics_in_video?: "yes" | "no" | "unknown";
+}) => call<Song>("/songs/youtube", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 export const retrySong = (id: string) => call<Song>(`/songs/${id}/retry`, { method: "POST" });
 

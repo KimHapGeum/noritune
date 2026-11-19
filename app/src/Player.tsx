@@ -1,5 +1,34 @@
 import { useEffect, useRef, useState } from "react";
-import { audioUrl, type Part, type Song } from "./api";
+import { audioUrl, getLyrics, type LyricLine, type Part, type Song } from "./api";
+
+/** 지금 부르는 줄(크게, 부른 만큼 색이 차오름)과 다음 줄을 보여 준다. */
+function LyricsView({ lines, pos, state }: { lines: LyricLine[]; pos: number; state?: string }) {
+  if (state === "off") return null;
+  if (!lines.length) {
+    const msg = state === "searching" ? "가사를 찾는 중이에요" : state === "generating" ? "가사를 만드는 중이에요" : "가사가 없어요";
+    return <div className="lyrics-view empty">{msg}</div>;
+  }
+  let i = -1;
+  while (i + 1 < lines.length && lines[i + 1].t <= pos) i++;
+  const cur = lines[i];
+  const next = lines[i + 1];
+  // 다음 줄 시작까지의 90% 동안 부른다고 보고 색을 채운다
+  const span = next ? (next.t - (cur?.t ?? 0)) * 0.9 : 4;
+  const fill = cur ? Math.min(1, (pos - cur.t) / Math.max(span, 0.5)) : 0;
+  return (
+    <div className="lyrics-view" aria-live="polite">
+      <p className="lyr-prev">{lines[i - 1]?.text ?? ""}</p>
+      <p className="lyr-cur">
+        {cur ? (
+          <span className="sung" style={{ backgroundSize: `${fill * 100}% 100%` }}>{cur.text}</span>
+        ) : (
+          <span className="muted">♪</span>
+        )}
+      </p>
+      <p className="lyr-next">{(cur ? next : lines[0])?.text ?? ""}</p>
+    </div>
+  );
+}
 
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
 
@@ -19,6 +48,12 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
   const [playing, setPlaying] = useState(false);
   const [pos, setPos] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+
+  // 가사는 곡을 고를 때와, 가사를 고르거나 만들어 상태가 바뀔 때 다시 받는다
+  useEffect(() => {
+    getLyrics(song.id).then((r) => setLyrics(r.lines)).catch(() => setLyrics([]));
+  }, [song.id, song.lyrics?.state, song.lyrics?.candidate_id]);
 
   const ctx = useRef<AudioContext | null>(null);
   const bufs = useRef<Partial<Record<Part, AudioBuffer>>>({});
@@ -154,11 +189,13 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
   }, [track, guide, chorus, lowpass, verb, loading]);
 
   useEffect(() => {
-    const t = setInterval(() => setPos(now()), 250);
+    const t = setInterval(() => setPos(now()), 100);
     return () => clearInterval(t);
   }, [playing]);
 
   return (
+    <>
+    <LyricsView lines={lyrics} pos={pos} state={song.lyrics?.state} />
     <footer className="player">
       <button className="play" onClick={() => (playing ? pause() : start(offset.current))} disabled={loading}
         aria-label={playing ? "일시정지" : "재생"}>
@@ -212,5 +249,6 @@ export default function Player({ song, onError }: { song: Song; onError: (msg: s
       )}
       {loading && <span className="muted">불러오는 중…</span>}
     </footer>
+    </>
   );
 }

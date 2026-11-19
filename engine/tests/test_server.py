@@ -35,8 +35,35 @@ def fake_hq(src, out_dir, duration, on_progress):
     return {**stems, "chorus": "chorus.ogg"}
 
 
-def make_client(data, separate=fake_separate, detect=None):
-    app = create_app(data, separators={"빠른 분리": separate, "고품질 분리": fake_hq}, detect=detect)
+SAMPLE = {}  # 가짜 받기가 복사할 소리 파일 (fixture가 채운다)
+
+
+def fake_download(vid, folder, with_video, on_progress):
+    on_progress(0.5)
+    (folder / "original.m4a").write_bytes(SAMPLE["wav"].read_bytes())
+    if with_video:
+        (folder / "video.mp4").write_bytes(b"video")
+    return {"file": "original.m4a", "video": "video.mp4" if with_video else None}
+
+
+def fake_search(q, karaoke_only):
+    return [{"id": "aE3irDN5yqQ", "title": q, "karaoke_only": karaoke_only}]
+
+
+LYRICS = {"cands": []}  # 가짜 가사 검색 결과 (시험마다 바꾼다)
+
+
+def fake_lyrics_search(title, artist, duration):
+    return LYRICS["cands"]
+
+
+def fake_auto(src):
+    return [{"t": 1.0, "text": "자동으로 만든 가사"}]
+
+
+def make_client(data, separate=fake_separate, detect=None, download=fake_download):
+    app = create_app(data, separators={"빠른 분리": separate, "고품질 분리": fake_hq}, detect=detect,
+                     search=fake_search, download=download, lyrics_search=fake_lyrics_search, auto_lyrics=fake_auto)
     return TestClient(app), app.state.worker
 
 
@@ -69,7 +96,7 @@ def test_add_list_and_stream(client, tmp_path):
 def test_quick_separation_makes_stems(client, tmp_path):
     src = make_wav(tmp_path / "a.wav")
     song = client.post("/songs", json={"path": str(src)}).json()  # 기본 방식 = 빠른 분리
-    assert song["mode"] == "빠른 분리" and song["status"] == "queued"
+    assert song["mode"] == "빠른 분리" and song["status"] in ("queued", "separating", "ready")  # 작업 줄이 바로 집어 갈 수 있다
     wait(client.worker)
     done = client.get(f"/songs/{song['id']}").json()
     assert done["status"] == "ready" and done["progress"] == 1.0
@@ -188,3 +215,128 @@ def test_song_with_vocals_is_not_asked(tmp_path):
     song = c.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav"))}).json()
     wait(w)
     assert c.get(f"/songs/{song['id']}").json()["status"] == "ready"
+
+
+@pytest.fixture
+def sample(tmp_path):
+    SAMPLE["wav"] = make_wav(tmp_path / "sample.wav")
+
+
+def add_yt(c, video_title, **kw):
+    body = {"id": "aE3irDN5yqQ", "video_title": video_title, "title": "우주를 줄게", "artist": "볼빨간사춘기", "duration": 1, **kw}
+    return c.post("/songs/youtube", json=body)
+
+
+def test_youtube_search_passes_query(client):
+    r = client.get("/youtube/search", params={"q": "우주를 줄게", "karaoke_only": "true"}).json()
+    assert r["results"][0]["karaoke_only"] is True
+    assert client.get("/youtube/search", params={"q": " "}).status_code == 400
+
+
+def test_youtube_normal_song_downloads_then_separates(client, sample):
+    song = add_yt(client, "볼빨간사춘기 - 우주를 줄게 [가사]").json()
+    assert song["status"] in ("queued", "downloading") and song["file"] is None
+    wait(client.worker)
+    s = client.get(f"/songs/{song['id']}").json()
+    assert s["status"] == "ready" and s["mode"] == "빠른 분리" and s["stems"] and s["app_lyrics"] is True
+    assert client.get(f"/songs/{song['id']}/audio?part=video").status_code == 404
+
+
+def test_youtube_karaoke_video_keeps_video_and_hides_lyrics(client, sample):
+    song = add_yt(client, "[TJ노래방] 우주를줄게 - 볼빨간사춘기 / TJ Karaoke", mode="고품질 분리").json()
+    wait(client.worker)
+    s = client.get(f"/songs/{song['id']}").json()
+    assert s["status"] == "ready" and s["mode"] == "반주 그대로" and s["app_lyrics"] is False
+    assert "stems" not in s  # 이미 반주라 분리하지 않는다
+    assert client.get(f"/songs/{song['id']}/audio?part=video").content == b"video"
+
+
+@pytest.mark.parametrize("answer,video,lyrics", [("yes", True, False), ("no", False, True), ("unknown", True, True)])
+def test_youtube_mr_follows_answer(client, sample, answer, video, lyrics):
+    song = add_yt(client, "우주를 줄게 피아노 반주 MR", lyrics_in_video=answer).json()
+    wait(client.worker)
+    s = client.get(f"/songs/{song['id']}").json()
+    assert s["app_lyrics"] is lyrics and (s.get("video") is not None) is video and s["mode"] == "반주 그대로"
+
+
+def test_youtube_mr_requires_answer(client):
+    r = add_yt(client, "우주를 줄게 MR")
+    assert r.status_code == 400 and "가사가 나오는지" in r.json()["detail"]
+
+
+def test_youtube_rejects_bad_id(client):
+    assert add_yt(client, "x", id="../../etc").status_code == 400
+
+
+def test_youtube_download_failure_can_retry(tmp_path, sample):
+    def broken(*a):
+        raise RuntimeError("유튜브에서 받지 못했어요")
+
+    c, w = make_client(tmp_path / "data", download=broken)
+    song = add_yt(c, "볼빨간사춘기 - 우주를 줄게").json()
+    wait(w)
+    assert c.get(f"/songs/{song['id']}").json()["status"] == "failed"
+    w.download = fake_download
+    c.post(f"/songs/{song['id']}/retry")
+    wait(w)
+    assert c.get(f"/songs/{song['id']}").json()["status"] == "ready"
+
+
+def cand(i, synced=True, recommended=False):
+    return {"id": i, "title": "밤편지", "artist": "아이유", "duration": 253, "diff": 0, "synced": synced,
+            "lines": [{"t": 10.0, "text": f"후보 {i}의 가사"}] if synced else [], "plain": "글자만", "recommended": recommended}
+
+
+def wait_lyrics(c, song_id):
+    import time
+    for _ in range(100):
+        st = c.get(f"/songs/{song_id}").json().get("lyrics", {}).get("state")
+        if st not in (None, "searching"):
+            return st
+        time.sleep(0.02)
+    raise AssertionError("가사 찾기가 끝나지 않음")
+
+
+def test_lyrics_review_then_choose(client, tmp_path):
+    LYRICS["cands"] = [cand(1, recommended=True), cand(2), cand(3, synced=False)]
+    song = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "원곡 그대로"}).json()
+    assert wait_lyrics(client, song["id"]) == "review"  # 후보를 찾으면 '목록 확인'
+    lyr = client.get(f"/songs/{song['id']}/lyrics").json()
+    assert lyr["lines"][0]["text"] == "후보 1의 가사"  # 고르기 전에도 추천 후보로 부를 수 있다
+    assert len(client.get(f"/songs/{song['id']}/lyrics/candidates").json()["candidates"]) == 3
+    assert client.post(f"/songs/{song['id']}/lyrics/choose", json={"candidate_id": 3}).status_code == 400  # 글자만
+    assert client.post(f"/songs/{song['id']}/lyrics/choose", json={"candidate_id": 99}).status_code == 404
+    r = client.post(f"/songs/{song['id']}/lyrics/choose", json={"candidate_id": 2}).json()
+    assert r["lyrics"]["state"] == "internet"
+    assert client.get(f"/songs/{song['id']}/lyrics").json()["lines"][0]["text"] == "후보 2의 가사"
+
+
+def test_lyrics_none_then_auto(client, tmp_path):
+    LYRICS["cands"] = []
+    song = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav"))}).json()
+    assert wait_lyrics(client, song["id"]) == "none"
+    wait(client.worker)  # 분리까지 끝낸다
+    assert client.post(f"/songs/{song['id']}/lyrics/auto").json()["lyrics"]["state"] == "generating"
+    wait(client.worker)
+    lyr = client.get(f"/songs/{song['id']}/lyrics").json()
+    assert lyr["state"] == "auto" and lyr["lines"][0]["text"] == "자동으로 만든 가사"
+
+
+def test_lyrics_auto_refused_for_instrumental(client, tmp_path):
+    LYRICS["cands"] = []
+    song = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "반주 그대로"}).json()
+    r = client.post(f"/songs/{song['id']}/lyrics/auto")
+    assert r.status_code == 400 and "목소리가 없는" in r.json()["detail"]
+
+
+def test_lyrics_sidecar_lrc_is_used(client, tmp_path):
+    src = make_wav(tmp_path / "내 노래.wav")
+    (tmp_path / "내 노래.lrc").write_text("[00:05.00] 파일에 있던 가사" + chr(10), encoding="utf-8")
+    song = client.post("/songs", json={"path": str(src), "mode": "원곡 그대로"}).json()
+    assert song["lyrics"]["state"] == "file"
+    assert client.get(f"/songs/{song['id']}/lyrics").json()["lines"] == [{"t": 5.0, "text": "파일에 있던 가사"}]
+
+
+def test_karaoke_video_lyrics_off(client, sample):
+    song = add_yt(client, "[TJ노래방] 우주를줄게 - 볼빨간사춘기 / TJ Karaoke").json()
+    assert song["lyrics"]["state"] == "off"

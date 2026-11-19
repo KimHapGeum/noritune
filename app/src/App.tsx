@@ -5,11 +5,26 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { addSong, decideSong, listSongs, MODES, retrySong, type Mode, type Song } from "./api";
 import Player from "./Player";
+import YoutubeDialog from "./YoutubeDialog";
+import LyricsChooser from "./LyricsChooser";
 import "./App.css";
 
 const AUDIO_EXTS = ["mp3", "wav", "flac", "m4a", "ogg", "opus"];
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
-const busy = (s: Song) => s.status === "queued" || s.status === "checking" || s.status === "separating";
+const busy = (s: Song) =>
+  ["queued", "downloading", "checking", "separating"].includes(s.status) ||
+  ["searching", "generating"].includes(s.lyrics?.state ?? "");
+// 곡 목록 가사 칸: [보이는 글자, 누를 수 있는지, 강조]
+const LYRICS_LABEL: Record<string, [string, boolean, string]> = {
+  searching: ["찾는 중", false, ""],
+  review: ["목록 확인", true, "lyr-review"],
+  internet: ["인터넷", true, ""],
+  generating: ["만드는 중", false, ""],
+  auto: ["자동 생성", true, "lyr-auto"],
+  file: ["가사 파일", true, ""],
+  none: ["가사 없음", true, "lyr-auto"],
+  off: ["영상 가사", false, ""],
+};
 
 export default function App() {
   const [songs, setSongs] = useState<Song[]>([]);
@@ -20,6 +35,8 @@ export default function App() {
   const [playing, setPlaying] = useState<Song | null>(null);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState(false);
+  const [ytOpen, setYtOpen] = useState(false);
+  const [lyricsFor, setLyricsFor] = useState<Song | null>(null);
 
   const refresh = () => listSongs().then(setSongs).catch((e) => setError(String(e.message ?? e)));
 
@@ -101,6 +118,7 @@ export default function App() {
               ))}
             </select>
           </label>
+          <button className="ghost" onClick={() => setYtOpen(true)}>유튜브에서 추가</button>
           <button className="primary" onClick={pickFiles} disabled={adding}>
             {adding ? "추가하는 중…" : "+ 곡 추가"}
           </button>
@@ -143,6 +161,12 @@ export default function App() {
                   <span className="status">
                     {s.status === "ready" && <span className="ok">준비됨</span>}
                     {s.status === "queued" && <span className="muted">기다리는 중</span>}
+                    {s.status === "downloading" && (
+                      <>
+                        유튜브에서 받는 중 {Math.round((s.progress ?? 0) * 100)}%
+                        <span className="bar"><span style={{ width: `${(s.progress ?? 0) * 100}%` }} /></span>
+                      </>
+                    )}
                     {s.status === "checking" && <span className="muted">반주인지 확인하는 중</span>}
                     {s.status === "confirm" && <span className="ask">반주 같아요. 분리할까요?</span>}
                     {s.status === "separating" && (
@@ -154,6 +178,15 @@ export default function App() {
                     {s.status === "failed" && <span className="fail" title={s.error ?? ""}>반주를 만들지 못했어요</span>}
                   </span>
                 </button>
+                {(() => {
+                  const [label, clickable, cls] = LYRICS_LABEL[s.lyrics?.state ?? "none"] ?? LYRICS_LABEL.none;
+                  return (
+                    <button className={`lyr ${cls}`} disabled={!clickable} onClick={() => setLyricsFor(s)}
+                      title={s.lyrics?.error ?? (clickable ? "눌러서 가사 고르기" : "")}>
+                      {label}
+                    </button>
+                  );
+                })()}
                 {s.status === "failed" && (
                   <button className="retry" onClick={() => act(() => retrySong(s.id))}>다시 시도</button>
                 )}
@@ -170,6 +203,8 @@ export default function App() {
       </main>
 
       {playing && <Player key={playing.id} song={playing} onError={setError} />}
+      {lyricsFor && <LyricsChooser song={lyricsFor} onClose={() => setLyricsFor(null)} onChanged={refresh} />}
+      {ytOpen && <YoutubeDialog defaultMode={mode} onClose={() => setYtOpen(false)} onAdded={refresh} />}
     </div>
   );
 }

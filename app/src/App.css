@@ -28,6 +28,40 @@ button { font: inherit; color: inherit; cursor: pointer; }
 button:disabled { cursor: default; }
 .primary { height: 44px; padding: 0 20px; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-ink); font-weight: 700; }
 .primary:disabled { opacity: 0.6; }
+.ghost { height: 44px; padding: 0 16px; border-radius: 12px; border: 1px solid #2c2f3b; background: #181a22; font-weight: 700; }
+
+.backdrop { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.6); display: flex; align-items: center; justify-content: center; padding: 24px; z-index: 10; }
+.dialog { width: 100%; max-width: 1000px; max-height: calc(100vh - 48px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid #2c2f3b; border-radius: 20px; }
+.dialog-head, .dialog-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 18px 24px; }
+.dialog-head { border-bottom: 1px solid var(--line); }
+.dialog-head h2 { margin: 0; font-size: 20px; }
+.dialog-head button { width: 40px; height: 40px; border-radius: 10px; border: 0; background: #1c1f29; }
+.dialog-foot { justify-content: flex-end; border-top: 1px solid var(--line); }
+.dialog-foot button:not(.primary) { height: 44px; padding: 0 18px; border-radius: 12px; border: 0; background: #1c1f29; }
+.dialog-body { display: flex; flex-wrap: wrap; overflow: auto; }
+.yt-search { flex: 999 1 480px; min-width: 0; padding: 20px 24px; display: flex; flex-direction: column; gap: 12px; border-right: 1px solid var(--line); }
+.yt-query { display: flex; gap: 8px; }
+.yt-query input, .yt-info input, .yt-info select { height: 44px; border-radius: 10px; border: 1px solid #2c2f3b; background: var(--bg); color: var(--text); font: inherit; padding: 0 12px; }
+.yt-query input { flex: 1; }
+.check { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.yt-results { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.yt-results button { width: 100%; display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg); text-align: left; }
+.yt-results button.on { border-color: var(--accent); background: #1a1218; }
+.yt-results img { border-radius: 8px; object-fit: cover; flex: none; background: #262935; }
+.yt-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.yt-title { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kind { flex: none; font-size: 12px; padding: 3px 8px; border-radius: 999px; }
+.kind-karaoke { background: #1e2a22; color: #9be7b4; }
+.kind-mr { background: #33291a; color: #ffd59e; }
+.kind-inst { background: #1b2632; color: #9ed9f2; }
+.yt-info { flex: 1 1 300px; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }
+.yt-info h3 { margin: 0; font-size: 16px; }
+.yt-info > label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: #c9cdda; }
+.note { margin: 0; padding: 12px; border-radius: 10px; background: #1b2632; color: #9ed9f2; font-size: 14px; line-height: 1.6; }
+.ask-lyrics { border: 1px solid #6b5326; border-radius: 10px; padding: 10px 14px; display: flex; gap: 16px; flex-wrap: wrap; }
+.ask-lyrics legend { color: #ffd59e; font-size: 14px; padding: 0 4px; }
+.ask-lyrics label { display: flex; align-items: center; gap: 6px; font-size: 14px; }
+.error.inline { margin: 0 24px 12px; }
 .muted { color: var(--muted); font-weight: 400; }
 .error { display: flex; justify-content: space-between; gap: 12px; margin: 16px 32px 0; padding: 12px 16px; border-radius: 12px; background: #2a1520; border: 1px solid #6b3a48; color: #ffc2d4; white-space: pre-line; }
 .error button { background: none; border: 0; color: inherit; }
@@ -58,8 +92,28 @@ main h2 { margin: 0 0 16px; font-size: 22px; }
 .decide { display: flex; gap: 8px; margin-right: 16px; }
 .decide button { height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid #2c2f3b; background: #181a22; }
 .decide .primary { border: 0; background: var(--accent); }
+.lyr { width: 96px; height: 34px; margin-right: 12px; border-radius: 10px; border: 1px solid #2c2f3b; background: #181a22; color: #c9cdda; font-size: 13px; }
+.lyr:disabled { border-color: transparent; background: none; color: var(--muted); }
+.lyr-review { border-color: #2e4a63; background: #1b2632; color: #9ed9f2; font-weight: 700; }
+.lyr-auto { color: #ffd59e; }
+.diff { flex: none; font-size: 12px; }
+.diff.ok { color: #7ee2a8; }
+.diff.far { color: #ffd59e; }
+.auto-pick { border-style: dashed !important; }
+.preview { margin: 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 15px; }
+.preview .muted { display: inline-block; width: 44px; font-size: 12px; }
+.yt-query input + input { flex: 0 1 160px; }
+.yt-query button:not(.primary) { height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid #2c2f3b; background: #181a22; }
 .retry { margin-right: 16px; height: 36px; padding: 0 14px; border-radius: 10px; border: 1px solid #6b3a48; background: #2a1520; color: #ffc2d4; }
 
+.lyrics-view { padding: 20px 32px 16px; border-top: 1px solid var(--line); background: #07080c; text-align: center; }
+.lyrics-view p { margin: 0; word-break: keep-all; }
+.lyrics-view.empty { color: var(--muted); font-size: 15px; }
+.lyr-prev { min-height: 22px; font-size: 16px; color: #6f7487; }
+.lyr-cur { min-height: 56px; margin: 8px 0 !important; font-size: 40px; font-weight: 900; letter-spacing: -0.5px; }
+.lyr-next { min-height: 34px; font-size: 26px; font-weight: 700; color: #8d92a6; }
+/* 부른 만큼 하늘색으로 차오르는 글자 */
+.sung { color: transparent; background: linear-gradient(#4cc9f0, #4cc9f0) no-repeat, linear-gradient(#ffffff, #ffffff); background-clip: text; -webkit-background-clip: text; transition: background-size 0.1s linear; }
 .player { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; padding: 14px 32px; border-top: 1px solid var(--line); background: var(--panel); }
 .player .play { width: 52px; height: 52px; border-radius: 14px; border: 0; background: var(--text); color: var(--bg); font-size: 18px; }
 .player .now { flex: 1; min-width: 260px; }

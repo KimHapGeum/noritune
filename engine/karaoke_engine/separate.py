@@ -76,6 +76,14 @@ def _clean_work() -> None:
         old.unlink()
 
 
+def _as_wav(src: Path) -> Path:
+    """분리 도구(libsndfile)는 m4a·webm 등을 못 읽는다. 작업 폴더에 wav로 바꿔 둔다. _lock 안에서 부른다."""
+    wav = work_dir() / "input.wav"
+    subprocess.run([_ffmpeg(), "-y", "-loglevel", "error", "-i", str(src), "-vn", "-ac", "2", "-ar", "44100", str(wav)],
+                   check=True, creationflags=_NO_WINDOW)
+    return wav
+
+
 def _to_opus(wav: Path, out: Path) -> None:
     subprocess.run([_ffmpeg(), "-y", "-loglevel", "error", "-i", str(wav), "-c:a", "libopus", "-b:a", "160k", str(out)],
                    check=True, creationflags=_NO_WINDOW)
@@ -111,7 +119,7 @@ def quick(src: Path, out_dir: Path, duration: float, on_progress) -> dict:
     try:
         with _lock:
             _clean_work()
-            vocals, inst = _split(QUICK, src)
+            vocals, inst = _split(QUICK, _as_wav(src))
     finally:
         prog.stop.set()
     on_progress(0.92)
@@ -126,10 +134,11 @@ def hq(src: Path, out_dir: Path, duration: float, on_progress) -> dict:
     try:
         with _lock:
             _clean_work()
-            _, inst = _split(HQ_INST, src)  # ① 반주 (코러스가 남은 노래방 반주)
+            wav = _as_wav(src)
+            _, inst = _split(HQ_INST, wav)  # ① 반주 (코러스가 남은 노래방 반주)
             _to_opus(inst, out_dir / "instrumental.ogg")
             prog.next()
-            all_vocals, _ = _split(HQ_VOCALS, src)  # ② 목소리 전부
+            all_vocals, _ = _split(HQ_VOCALS, wav)  # ② 목소리 전부
             prog.next()
             lead, chorus = _split(QUICK, all_vocals)  # ③ 주 목소리 / 코러스
     finally:
