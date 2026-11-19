@@ -452,3 +452,12 @@ def test_turning_lyrics_on_for_karaoke_video_starts_search(client, sample):
     assert song["lyrics"]["state"] == "off"
     client.patch(f"/songs/{song['id']}/prefs", json={"lyrics": True})
     assert wait_lyrics(client, song["id"]) == "review"
+
+
+def test_favorite_and_play_count(client, tmp_path):
+    sid = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "원곡 그대로"}).json()["id"]
+    assert client.patch(f"/songs/{sid}/prefs", json={"favorite": True}).json()["prefs"]["favorite"] is True
+    client.post(f"/songs/{sid}/played")
+    s = client.post(f"/songs/{sid}/played").json()
+    assert s["plays"] == 2 and s["last_played"]
+    assert client.get("/settings").json()["auto_hide"] is True

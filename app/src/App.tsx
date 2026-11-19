@@ -3,7 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { addSong, DEFAULT_SETTINGS, decideSong, getQueue, getSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
+import { addSong, DEFAULT_SETTINGS, decideSong, getQueue, markPlayed, savePrefs, getSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
 import Settings from "./Settings";
 import QueuePanel from "./QueuePanel";
 import Player from "./Player";
@@ -48,7 +48,12 @@ export default function App() {
   const [mode, setMode] = useState<Mode>("빠른 분리");
   // n: 같은 곡을 이어서 불러도 재생기를 새로 띄우도록 매번 바뀌는 번호
   const [playing, setPlaying] = useState<{ song: Song; n: number } | null>(null);
-  const play = (song: Song | null) => setPlaying(song && { song, n: Date.now() });
+  const play = (song: Song | null) => {
+    setPlaying(song && { song, n: Date.now() });
+    if (song) markPlayed(song.id).then(refresh).catch(() => {}); // 부른 횟수 (기획서 F16)
+  };
+  const [view, setView] = useState<"all" | "fav" | "most">("all");
+  const [sort, setSort] = useState<"added" | "title" | "artist" | "plays">("added");
   const [queue, setQueue] = useState<string[]>([]);
   const waiting = useRef(false); // 예약한 곡이 준비되면 바로 틀지 (켜자마자 저장된 예약을 틀지 않도록)
   const [update, setUpdate] = useState<Update | null>(null);
@@ -69,6 +74,15 @@ export default function App() {
       /* 저장이 막혀도 이번 실행 동안은 숨긴다 */
     }
   };
+  // 곡 목록 보기·정렬 (기획서 F16). 많이 부른 곡은 부른 횟수 순
+  const by = view === "most" ? "plays" : sort;
+  const shown = songs
+    .filter((s) => (view === "fav" ? s.prefs?.favorite : view === "most" ? (s.plays ?? 0) > 0 : true))
+    .sort((a, b) =>
+      by === "title" ? a.title.localeCompare(b.title, "ko")
+      : by === "artist" ? (a.artist || "힣").localeCompare(b.artist || "힣", "ko")
+      : by === "plays" ? (b.plays ?? 0) - (a.plays ?? 0) || (b.last_played ?? "").localeCompare(a.last_played ?? "")
+      : (b.added_at ?? "").localeCompare(a.added_at ?? ""));
   // 기획서 F5 알림: 자동 생성했거나 못 찾은 가사를 확인하도록
   const notice = songs.find((s) => ["auto", "none"].includes(s.lyrics?.state ?? "") && !seen.includes(s.id));
 
@@ -227,19 +241,39 @@ export default function App() {
 
       <div className="body">
       <main>
-        <h2>
-          내 노래 <span className="muted">{songs.length}곡</span>
-        </h2>
+        <div className="list-head">
+          <h2>
+            내 노래 <span className="muted">{songs.length}곡</span>
+          </h2>
+          <div className="seg" role="radiogroup" aria-label="보기">
+            {([["all", "전체"], ["fav", "즐겨찾기"], ["most", "많이 부른 곡"]] as const).map(([v, label]) => (
+              <button key={v} role="radio" aria-checked={view === v} className={view === v ? "on" : ""} onClick={() => setView(v)}>{label}</button>
+            ))}
+          </div>
+          <label className="row-label">정렬
+            <select value={view === "most" ? "plays" : sort} disabled={view === "most"} onChange={(e) => setSort(e.target.value as typeof sort)}>
+              <option value="added">추가한 날</option>
+              <option value="title">제목</option>
+              <option value="artist">가수</option>
+              <option value="plays">부른 횟수</option>
+            </select>
+          </label>
+        </div>
         {songs.length === 0 ? (
           <p className="empty">노래 파일(MP3·WAV·FLAC)을 이 창에 끌어다 놓거나 "곡 추가"를 누르세요.</p>
         ) : (
           <ul className="songs">
-            {songs.map((s) => (
+            {shown.length === 0 && <li className="list-empty muted">{view === "fav" ? "별을 누른 곡이 여기에 모여요." : "아직 부른 곡이 없어요."}</li>}
+            {shown.map((s) => (
               <li key={s.id} className={playing?.song.id === s.id ? "on" : ""}>
+                <button className={`star${s.prefs?.favorite ? " on" : ""}`} aria-pressed={!!s.prefs?.favorite}
+                  aria-label={`${s.title} 즐겨찾기`} onClick={() => act(() => savePrefs(s.id, { favorite: !s.prefs?.favorite }))}>
+                  {s.prefs?.favorite ? "★" : "☆"}
+                </button>
                 <button className="row" onClick={() => play(s)} disabled={s.status !== "ready"} title="눌러서 바로 부르기">
                   <span>
                     <span className="title">{s.title}</span>
-                    <span className="muted"> {s.artist || "가수 모름"} · {fmt(s.duration)}</span>
+                    <span className="muted"> {s.artist || "가수 모름"} · {fmt(s.duration)}{s.plays ? ` · ${s.plays}번 부름` : ""}</span>
                   </span>
                   <span className={`chip mode-${MODES.indexOf(s.mode)}`}>{s.mode}</span>
                   <span className="status">

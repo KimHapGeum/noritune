@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { audioUrl, getLyrics, savePrefs, type Gender, type LyricLine, type Part, type Prefs, type Settings, type Song } from "./api";
 import Stage from "./Stage";
+import { interludeTarget, verseEnd } from "./verse";
 import LyricsEditor from "./LyricsEditor";
 import SignalsmithStretch from "./vendor/SignalsmithStretch.mjs";
 
@@ -52,6 +53,7 @@ export function keyLabel(key: number, preset: Preset, gender?: Gender): string {
   return name ? (sym ? `${name} ${sym}` : name) : sym || "원키";
 }
 
+const QUIET_KEYS = ["ArrowUp", "ArrowDown", "+", "-", "0", "j", "J"];
 const typingIn = (e: KeyboardEvent) => !!(e.target as HTMLElement).closest?.("input, textarea, select, [role=dialog]");
 
 /**
@@ -90,6 +92,14 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
   const [lyricsOn, setLyricsOn] = useState(p.lyrics ?? song.app_lyrics !== false);
   const [stageOpen, setStageOpen] = useState(true);
   const [bgOpen, setBgOpen] = useState(false);
+  const [verseOnly, setVerseOnly] = useState(false); // 1절만 (기획서 F15)
+  const fading = useRef(false);
+  // 버튼 줄 자동 숨김 (기획서 F6)
+  const [idle, setIdle] = useState(false);
+  const [hover, setHover] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [toast, setToast] = useState("");
+  const fromKeyboard = useRef(false);
   const [bgUrlText, setBgUrlText] = useState(p.bg_kind === "youtube" ? `https://youtu.be/${p.bg_value}` : "");
 
   // 가사는 곡을 고를 때와, 가사를 고르거나 만들어 상태가 바뀔 때 다시 받는다
@@ -310,8 +320,11 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
     if (e.key === "ArrowUp" || e.key === "+") changeKey(1);
     else if (e.key === "ArrowDown" || e.key === "-") changeKey(-1);
     else if (e.key === "0") choosePreset("orig");
+    else if ((e.key === "j" || e.key === "J") && jumpTo !== null) jump();
+    else if (e.key === "Home") seek(0);
     else if ((e.key === "e" || e.key === "E") && lyricsOn) openEditor();
     else return;
+    fromKeyboard.current = true;
     e.preventDefault();
   };
   useEffect(() => {
@@ -343,12 +356,74 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
 
   // 들리는 소리 위치: 들리기까지의 지연(곡 시간으로는 속도만큼)을 뺀다. 가사는 사용자 보정도 뺀다
   const heard = Math.max(0, pos - latency * tempo);
+  const lyricPos = Math.max(0, heard - settings.lyrics_delay);
+  const toSongTime = (t: number) => t + settings.lyrics_delay + latency * tempo; // 가사 시간 → 곡 위치
   const bgKind = p.bg_kind ?? "auto";
 
+  // 간주 점프 · 1절만 (기획서 F15): 가사가 켜져 있고 시간 맞춘 가사가 있을 때만
+  const useLyrics = lyricsOn && lyrics.length > 0;
+  const jumpTo = useLyrics ? interludeTarget(lyrics, lyricPos) : null;
+  const verseAt = useLyrics ? verseEnd(lyrics, duration) : null;
+  function jump() {
+    if (jumpTo === null) return;
+    seek(toSongTime(jumpTo));
+    showToast("간주 점프");
+  }
+  useEffect(() => {
+    if (!verseOnly || verseAt === null || !playing || fading.current || lyricPos < verseAt) return;
+    // 1절 끝: 3초 동안 소리를 줄이며 끝내고 다음 곡으로
+    fading.current = true;
+    const g = bus.current!.gain;
+    const t = ctx.current!.currentTime;
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(0, t + 3);
+    setTimeout(() => {
+      stopSources();
+      setPlaying(false);
+      endedRef.current();
+    }, 3000);
+  }, [lyricPos, verseOnly, verseAt, playing]);
+
+  function showToast(text: string) {
+    setToast(text);
+  }
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(""), 2000);
+    return () => clearTimeout(t);
+  }, [toast]);
+  useEffect(() => {
+    if (!fromKeyboard.current) return;
+    fromKeyboard.current = false;
+    showToast(keyLabel(key, preset, gender));
+  }, [key, preset]);
+
+  // 3초 동안 마우스·키보드 입력이 없으면 버튼 줄을 숨긴다. 막는 것이 풀리면 다시 3초를 센다
+  useEffect(() => {
+    let t = 0;
+    const poke = (e?: Event) => {
+      // 키·간주 단축키는 버튼 줄을 숨긴 채 구석 표시만 띄운다 (기획서 F6)
+      if (e instanceof KeyboardEvent && QUIET_KEYS.includes(e.key)) return;
+      setIdle(false);
+      clearTimeout(t);
+      t = window.setTimeout(() => setIdle(true), 3000);
+    };
+    poke();
+    const evs = ["mousemove", "mousedown", "keydown", "wheel"] as const;
+    evs.forEach((e) => window.addEventListener(e, poke));
+    return () => {
+      clearTimeout(t);
+      evs.forEach((e) => window.removeEventListener(e, poke));
+    };
+  }, [playing, bgOpen, askGender, editing, hover, moreOpen, stageOpen]);
+  const hideUi = idle && settings.auto_hide && playing && stageOpen && !bgOpen && !askGender && !editing && !hover && !moreOpen;
+  const barHover = { onMouseEnter: () => setHover(true), onMouseLeave: () => setHover(false) };
+
   return (
-    <div className={stageOpen ? "player-wrap full" : "player-wrap"}>
+    <div className={`player-wrap${stageOpen ? " full" : ""}${hideUi ? " idle" : ""}`}>
     {stageOpen && (
       <Stage song={song} settings={settings} heardPos={heard} tempo={tempo} playing={playing} lyricsOn={lyricsOn}
+        topProps={barHover}
         top={
           <>
             <button onClick={() => setStageOpen(false)} aria-label="곡 목록으로">← 곡 목록</button>
@@ -356,6 +431,8 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
             <button onClick={toggleLyrics} aria-pressed={lyricsOn} className={lyricsOn ? "on" : ""}
               title={song.video ? "가사를 끄면 노래방 영상이 화면 전체에 나와요" : ""}>가사 {lyricsOn ? "켬" : "끔"}</button>
             {lyricsOn && <button onClick={openEditor} disabled={loading} title="단축키 E">가사 고치기</button>}
+            <button onClick={() => setVerseOnly((v) => !v)} aria-pressed={verseOnly} className={verseOnly ? "on" : ""} disabled={verseAt === null}
+              title={verseAt === null ? "가사가 없거나 꺼져 있으면 1절 끝을 알 수 없어요" : `1절 끝(${fmt(verseAt)})에서 줄이며 끝내요`}>1절만</button>
             {!(song.video && !lyricsOn) && <button onClick={() => setBgOpen((o) => !o)} aria-expanded={bgOpen}>배경 바꾸기</button>}
             {bgOpen && (
               <div className="bg-pop" role="group" aria-label="이 곡의 배경">
@@ -371,9 +448,11 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
             )}
           </>
         }>
-        {lyricsOn && <LyricsView lines={lyrics} pos={Math.max(0, heard - settings.lyrics_delay)} state={song.lyrics?.state} />}
+        {jumpTo !== null && <button className="jump" onClick={jump} title="단축키 J">간주 점프 ▸▸</button>}
+        {lyricsOn && <LyricsView lines={lyrics} pos={lyricPos} state={song.lyrics?.state} />}
       </Stage>
     )}
+    {toast && hideUi && <div className="toast" role="status">{toast}</div>}
     {editing && (
       <LyricsEditor song={song} startAt={editing.at}
         onClose={(saved) => {
@@ -382,7 +461,7 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
           setEditing(null);
         }} />
     )}
-    <footer className="player">
+    <footer className="player" {...barHover}>
       <div className="ctl-group" role="group" aria-label="키 조절">
         <div className="stepper">
           <button onClick={() => changeKey(-1)} disabled={key <= -6} aria-label="키 내림" title="↓ 또는 -">−</button>
@@ -407,6 +486,7 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
           </div>
         )}
       </div>
+      <button className="next" onClick={() => seek(0)} disabled={loading} aria-label="처음부터" title="처음부터 (Home)">⏮</button>
       <button className="play" onClick={() => (playing ? pause() : start(offset.current))} disabled={loading}
         aria-label={playing ? "일시정지" : "재생"}>
         {playing ? "❚❚" : "▶"}
@@ -440,7 +520,7 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
                 <input type="range" min={0} max={150} step={10} value={chorus} disabled={track === "orig"}
                   onChange={(e) => setChorus(Number(e.target.value))} />
               </label>
-              <details className="more">
+              <details className="more" onToggle={(e) => setMoreOpen(e.currentTarget.open)}>
                 <summary>코러스 다듬기</summary>
                 <label>
                   고음 깎기

@@ -73,6 +73,7 @@ class Prefs(BaseModel):
     lowpass: Literal[0, 12000, 9000, 7000, 5000, 3500] | None = None
     verb: int | None = Field(None, ge=0, le=100)
     lyrics: bool | None = None  # 이 곡에서 앱 가사를 켤지 (기획서 F12: 곡마다 기억)
+    favorite: bool | None = None  # 즐겨찾기 (기획서 F16)
     # 이 곡만의 배경 (기획서 F11 "배경 바꾸기"). auto: 설정을 따른다
     bg_kind: Literal["auto", "default", "youtube", "file"] | None = None
     bg_value: str | None = Field(None, max_length=1000)
@@ -87,6 +88,7 @@ class Settings(BaseModel):
     bg_files: list[str] = Field(default_factory=list, max_length=50)
     bg_interval: Literal[10, 30, 0] = 10  # 사진 여러 장일 때 바꾸는 간격(초). 0: 곡마다
     bg_dim: int = Field(55, ge=0, le=90)
+    auto_hide: bool = True  # 부르는 동안 버튼 줄 자동 숨김 (기획서 F6)
 
     @field_validator("bg_files")
     @classmethod
@@ -228,6 +230,15 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
             return []
         known = {s["id"] for s in lib.list()}
         return [i for i in ids if i in known]
+
+    @app.post("/songs/{song_id}/played")
+    def played(song_id: str):
+        """부른 횟수와 마지막으로 부른 때 (기획서 F16)"""
+        from datetime import datetime, timezone
+
+        s = find(song_id)
+        return lib.update(song_id, plays=s.get("plays", 0) + 1,
+                          last_played=datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
     @app.get("/songs/{song_id}/mv")
     def find_mv(song_id: str):

@@ -19,12 +19,16 @@ export type Song = {
   stems?: { instrumental: string; vocals: string; chorus?: string };
   gender?: Gender;
   prefs?: Prefs;
+  added_at?: string;
+  plays?: number; // 부른 횟수
+  last_played?: string;
 };
 export type Gender = "male" | "female" | "mixed";
 export type Prefs = {
   key?: number; preset?: "orig" | "male" | "female"; tempo?: number;
   guide?: number; chorus?: number; lowpass?: number; verb?: number;
   lyrics?: boolean; // 이 곡에서 앱 가사를 켤지
+  favorite?: boolean; // 즐겨찾기
   bg_kind?: "auto" | "default" | "youtube" | "file"; bg_value?: string | null; // 이 곡만의 배경
 };
 
@@ -89,8 +93,9 @@ export type Settings = {
   lyrics_delay: number;
   bg_mode: "default" | "mv" | "custom"; bg_mv_fallback: "default" | "custom";
   bg_files: string[]; bg_interval: 10 | 30 | 0; bg_dim: number;
+  auto_hide: boolean;
 };
-export const DEFAULT_SETTINGS: Settings = { lyrics_delay: 0, bg_mode: "mv", bg_mv_fallback: "default", bg_files: [], bg_interval: 10, bg_dim: 55 };
+export const DEFAULT_SETTINGS: Settings = { lyrics_delay: 0, bg_mode: "mv", bg_mv_fallback: "default", bg_files: [], bg_interval: 10, bg_dim: 55, auto_hide: true };
 /** 공식 뮤비 후보 (좋은 순). badMv: 틀 수 없던 것을 뺀다 */
 export const findMv = (id: string) => call<{ ids: string[] }>(`/songs/${id}/mv`).then((r) => r.ids);
 export const badMv = (id: string, vid: string) => post<{ ids: string[] }>(`/songs/${id}/mv/bad`, { queue: [vid] });
@@ -104,6 +109,8 @@ export const putSettings = (body: Settings) =>
 export const getQueue = () => call<{ queue: string[] }>("/queue").then((r) => r.queue);
 export const putQueue = (queue: string[]) =>
   call<{ queue: string[] }>("/queue", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ queue }) });
+
+export const markPlayed = (id: string) => post<Song>(`/songs/${id}/played`);
 
 export const retrySong = (id: string) => call<Song>(`/songs/${id}/retry`, { method: "POST" });
 

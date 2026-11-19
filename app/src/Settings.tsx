@@ -58,6 +58,14 @@ export default function Settings({ settings, onChange, onClose }: {
           </section>
 
           <section>
+            <h3>재생 화면</h3>
+            <label className="check">
+              <input type="checkbox" checked={settings.auto_hide} onChange={(e) => onChange({ ...settings, auto_hide: e.target.checked })} />
+              부르는 동안 버튼 줄 자동 숨김 (3초 동안 마우스·키보드를 안 쓰면)
+            </label>
+          </section>
+
+          <section>
             <h3>재생 화면 배경</h3>
             <div className="seg" role="radiogroup" aria-label="기본 배경">
               {([["mv", "유튜브 뮤직비디오"], ["default", "기본 배경화면"], ["custom", "내 배경화면"]] as const).map(([v, label]) => (
