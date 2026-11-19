@@ -63,8 +63,8 @@ const typingIn = (e: KeyboardEvent) => !!(e.target as HTMLElement).closest?.("in
 // shortcut: 키 엔진(Signalsmith 기본 설정) 지연을 2026-11-20 앱에서 잰 값(키와 상관없이 0.12초). 엔진 설정을 바꾸면 다시 잰다
 const ENGINE_LATENCY = 0.12;
 
-export default function Player({ song, settings, lyricsRev, hasNext, onEnded, onError, onChanged }: {
-  song: Song; settings: Settings; lyricsRev: number; hasNext: boolean; onEnded: () => void;
+export default function Player({ song, settings, onSettings, lyricsRev, hasNext, onEnded, onError, onChanged }: {
+  song: Song; settings: Settings; onSettings: (s: Settings) => void; lyricsRev: number; hasNext: boolean; onEnded: () => void;
   onError: (msg: string) => void; onChanged: () => void;
 }) {
   const separated = !!song.stems;
@@ -538,6 +538,17 @@ export default function Player({ song, settings, lyricsRev, hasNext, onEnded, on
             </>
           )}
         </>
+      )}
+      {settings.mic_on && (
+        <details className="more" onToggle={(e) => setMoreOpen(e.currentTarget.open)}>
+          <summary>마이크</summary>
+          <label>음량 <b>{settings.mic_volume}%</b>
+            <input type="range" min={0} max={150} step={5} value={settings.mic_volume} onChange={(e) => onSettings({ ...settings, mic_volume: Number(e.target.value) })} />
+          </label>
+          <label>에코 <b>{settings.mic_echo}%</b>
+            <input type="range" min={0} max={100} step={5} value={settings.mic_echo} onChange={(e) => onSettings({ ...settings, mic_echo: Number(e.target.value) })} />
+          </label>
+        </details>
       )}
       {loading && <span className="muted">불러오는 중…</span>}
       <div className="ctl-group" role="group" aria-label="속도 조절">

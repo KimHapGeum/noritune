@@ -94,8 +94,10 @@ export type Settings = {
   bg_mode: "default" | "mv" | "custom"; bg_mv_fallback: "default" | "custom";
   bg_files: string[]; bg_interval: 10 | 30 | 0; bg_dim: number;
   auto_hide: boolean;
+  mic_on: boolean; mic_device: string; mic_volume: number; mic_echo: number;
 };
-export const DEFAULT_SETTINGS: Settings = { lyrics_delay: 0, bg_mode: "mv", bg_mv_fallback: "default", bg_files: [], bg_interval: 10, bg_dim: 55, auto_hide: true };
+export const DEFAULT_SETTINGS: Settings = { lyrics_delay: 0, bg_mode: "mv", bg_mv_fallback: "default", bg_files: [], bg_interval: 10, bg_dim: 55, auto_hide: true,
+  mic_on: false, mic_device: "", mic_volume: 80, mic_echo: 30 };
 /** 공식 뮤비 후보 (좋은 순). badMv: 틀 수 없던 것을 뺀다 */
 export const findMv = (id: string) => call<{ ids: string[] }>(`/songs/${id}/mv`).then((r) => r.ids);
 export const badMv = (id: string, vid: string) => post<{ ids: string[] }>(`/songs/${id}/mv/bad`, { queue: [vid] });

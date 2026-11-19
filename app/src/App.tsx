@@ -3,8 +3,9 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { addSong, DEFAULT_SETTINGS, decideSong, getQueue, markPlayed, savePrefs, getSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
+import { addSong, DEFAULT_SETTINGS, decideSong, getQueue, markPlayed, savePrefs, getSettings, putSettings, listSongs, putQueue, MODES, retrySong, type Mode, type Settings as AppSettings, type Song } from "./api";
 import Settings from "./Settings";
+import { setMic, startMic, stopMic } from "./Mic";
 import QueuePanel from "./QueuePanel";
 import Player from "./Player";
 import YoutubeDialog from "./YoutubeDialog";
@@ -64,6 +65,8 @@ export default function App() {
   const [lyricsRev, setLyricsRev] = useState(0); // 가사를 바꾸면 재생 화면이 다시 받도록
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsLoaded = useRef(false);
+  const [micLatency, setMicLatency] = useState<number | null>(null);
   const [seen, setSeen] = useState(loadSeen);
   const markSeen = (id: string) => {
     const next = [...seen.filter((x) => x !== id), id].slice(-500);
@@ -132,7 +135,10 @@ export default function App() {
 
   useEffect(() => {
     refresh();
-    getSettings().then(setSettings).catch(() => {});
+    getSettings().then((s) => {
+      setSettings(s);
+      settingsLoaded.current = true;
+    }).catch(() => {});
     getQueue().then(setQueue).catch(() => {});
     // 켤 때 새 버전 확인. 인터넷이 없거나 개발판이면 조용히 넘어간다
     check().then(setUpdate).catch(() => {});
@@ -180,6 +186,33 @@ export default function App() {
       playNext();
     }
   }, [songs, queue, playing]);
+
+  // 설정은 0.4초 동안 더 바꾸지 않으면 저장한다 (불러오기 전의 기본값으로 덮어쓰지 않게)
+  useEffect(() => {
+    if (!settingsLoaded.current) return;
+    const t = setTimeout(() => putSettings(settings).catch((e) => setError(`설정을 저장하지 못했어요: ${e.message}`)), 400);
+    return () => clearTimeout(t);
+  }, [settings]);
+
+  // 마이크 (기획서 F13): 켜 두면 곡 목록에서도 계속 나온다
+  useEffect(() => {
+    if (!settings.mic_on) {
+      stopMic();
+      setMicLatency(null);
+      return;
+    }
+    startMic(settings.mic_device, () => setError("마이크 소리가 갑자기 커져서 줄였어요 (하울링 방지). 마이크를 스피커에서 떨어뜨려 주세요."))
+      .then((lat) => {
+        setMicLatency(lat);
+        setMic(settings.mic_volume, settings.mic_echo);
+      })
+      .catch((e) => {
+        setError(`마이크를 켜지 못했어요: ${e.message}`);
+        setSettings((s) => ({ ...s, mic_on: false }));
+      });
+    return () => stopMic();
+  }, [settings.mic_on, settings.mic_device]);
+  useEffect(() => setMic(settings.mic_volume, settings.mic_echo), [settings.mic_volume, settings.mic_echo]);
 
   // 반주를 만드는 곡이 있는 동안 1.5초마다 상태를 새로 받는다
   const anyBusy = songs.some(busy);
@@ -326,7 +359,7 @@ export default function App() {
       <QueuePanel queue={queue} songs={songs} onChange={changeQueue} />
       </div>
 
-      {playing && <Player key={playing.n} song={songs.find((s) => s.id === playing.song.id) ?? playing.song} settings={settings} hasNext={queue.length > 0} onEnded={playNext} lyricsRev={lyricsRev} onError={setError} onChanged={refresh} />}
+      {playing && <Player key={playing.n} song={songs.find((s) => s.id === playing.song.id) ?? playing.song} settings={settings} onSettings={setSettings} hasNext={queue.length > 0} onEnded={playNext} lyricsRev={lyricsRev} onError={setError} onChanged={refresh} />}
       {lyricsFor && (
         <LyricsChooser song={lyricsFor} onClose={() => setLyricsFor(null)}
           onChanged={() => { refresh(); setLyricsRev((r) => r + 1); }}
@@ -337,7 +370,7 @@ export default function App() {
           onClose={(saved) => { setEditFor(null); if (saved) { refresh(); setLyricsRev((r) => r + 1); } }}
           onChooseOther={() => { setLyricsFor(editFor); setEditFor(null); }} />
       )}
-      {settingsOpen && <Settings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <Settings settings={settings} onChange={setSettings} onClose={() => setSettingsOpen(false)} micLatency={micLatency} />}
       {ytOpen && <YoutubeDialog defaultMode={mode} onClose={() => setYtOpen(false)} onAdded={refresh} />}
     </div>
   );

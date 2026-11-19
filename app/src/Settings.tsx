@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
-import { putSettings, type Settings as S } from "./api";
+import { type Settings as S } from "./api";
+import { micLevel } from "./Mic";
 
 // licenses 폴더의 전문을 모두 보여 준다. 같은 폴더가 설치 파일의 licenses/ 로도 들어간다 (tauri.conf.json)
 const LICENSES = import.meta.glob("./licenses/*.txt", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
@@ -10,11 +11,21 @@ const NAMES: Record<string, string> = {
 };
 
 /** 설정 화면. 바꾸면 바로 적용하고 처리기에 저장한다. */
-export default function Settings({ settings, onChange, onClose }: {
-  settings: S; onChange: (s: S) => void; onClose: () => void;
+export default function Settings({ settings, onChange, onClose, micLatency }: {
+  settings: S; onChange: (s: S) => void; onClose: () => void; micLatency: number | null;
 }) {
   const [version, setVersion] = useState("");
-  const [err, setErr] = useState("");
+  const [mics, setMics] = useState<MediaDeviceInfo[]>([]);
+  const [level, setLevel] = useState(0);
+  useEffect(() => {
+    navigator.mediaDevices?.enumerateDevices().then((d) => setMics(d.filter((x) => x.kind === "audioinput" && x.deviceId !== "default" && x.deviceId !== "communications"))).catch(() => {});
+  }, [settings.mic_on]);
+  // 마이크 소리 크기 막대
+  useEffect(() => {
+    if (!settings.mic_on) return setLevel(0);
+    const t = setInterval(() => setLevel(micLevel()), 100);
+    return () => clearInterval(t);
+  }, [settings.mic_on]);
   useEffect(() => void getVersion().then(setVersion).catch(() => {}), []);
 
   useEffect(() => {
@@ -22,14 +33,6 @@ export default function Settings({ settings, onChange, onClose }: {
     window.addEventListener("keydown", on);
     return () => window.removeEventListener("keydown", on);
   }, []);
-
-  // 0.4초 동안 더 바꾸지 않으면 저장
-  const first = useRef(true);
-  useEffect(() => {
-    if (first.current) return void (first.current = false);
-    const t = setTimeout(() => putSettings(settings).then(() => setErr("")).catch((e) => setErr(`설정을 저장하지 못했어요: ${e.message}`)), 400);
-    return () => clearTimeout(t);
-  }, [settings]);
 
   const delay = settings.lyrics_delay;
   const setDelay = (v: number) => onChange({ ...settings, lyrics_delay: Math.max(-2, Math.min(2, Math.round(v * 100) / 100)) });
@@ -55,6 +58,41 @@ export default function Settings({ settings, onChange, onClose }: {
             <input type="range" min={-1} max={1} step={0.05} value={Math.max(-1, Math.min(1, delay))} aria-label="가사 시간 보정"
               onChange={(e) => setDelay(Number(e.target.value))} />
             {delay !== 0 && <button className="text-btn" onClick={() => setDelay(0)}>보정 없음으로 되돌리기</button>}
+          </section>
+
+          <section>
+            <h3>마이크</h3>
+            <label className="check">
+              <input type="checkbox" checked={settings.mic_on} onChange={(e) => onChange({ ...settings, mic_on: e.target.checked })} />
+              PC 마이크 소리를 에코와 함께 스피커로 내기
+            </label>
+            {!settings.mic_on && <p className="muted small-p">노래방 앰프·믹서에 마이크를 따로 연결해 쓰면 끄고 쓰세요.</p>}
+            {settings.mic_on && (
+              <>
+                <p className="note">스피커 가까이에서 마이크를 쓰면 삐 소리(하울링)가 날 수 있어요. 소리가 갑자기 커지면 자동으로 줄여요.</p>
+                <label className="row-label">마이크
+                  <select value={settings.mic_device} onChange={(e) => onChange({ ...settings, mic_device: e.target.value })}>
+                    <option value="">Windows 기본 마이크</option>
+                    {mics.map((m) => <option key={m.deviceId} value={m.deviceId}>{m.label || "이름 없는 마이크"}</option>)}
+                  </select>
+                </label>
+                <div className="mic-meter" role="meter" aria-label="마이크 소리 크기" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(level * 100)}>
+                  <span style={{ width: `${Math.min(100, level * 100)}%`, background: level > 0.9 ? "#ff6b6b" : "#4cc9f0" }} />
+                </div>
+                <label className="row-label">음량 <b>{settings.mic_volume}%</b>
+                  <input type="range" min={0} max={150} step={5} value={settings.mic_volume} onChange={(e) => onChange({ ...settings, mic_volume: Number(e.target.value) })} />
+                </label>
+                <label className="row-label">에코 <b>{settings.mic_echo}%</b>
+                  <input type="range" min={0} max={100} step={5} value={settings.mic_echo} onChange={(e) => onChange({ ...settings, mic_echo: Number(e.target.value) })} />
+                </label>
+                {micLatency !== null && (
+                  <p className={micLatency > 0.1 ? "note warn" : "muted small-p"}>
+                    마이크 소리가 스피커로 나오기까지 약 {micLatency.toFixed(2)}초 걸려요.
+                    {micLatency > 0.1 && " 늦게 들리면 유선 마이크·헤드셋을 쓰거나 외부 믹서를 쓰세요."}
+                  </p>
+                )}
+              </>
+            )}
           </section>
 
           <section>
@@ -127,7 +165,6 @@ export default function Settings({ settings, onChange, onClose }: {
             })}
           </section>
         </div>
-        {err && <div className="error inline" role="alert">{err}</div>}
       </div>
     </div>
   );

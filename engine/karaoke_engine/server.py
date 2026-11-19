@@ -89,6 +89,11 @@ class Settings(BaseModel):
     bg_interval: Literal[10, 30, 0] = 10  # 사진 여러 장일 때 바꾸는 간격(초). 0: 곡마다
     bg_dim: int = Field(55, ge=0, le=90)
     auto_hide: bool = True  # 부르는 동안 버튼 줄 자동 숨김 (기획서 F6)
+    # 마이크 (기획서 F13). 기본은 꺼짐: 앰프·믹서를 따로 쓰는 사람도 있다
+    mic_on: bool = False
+    mic_device: str = Field("", max_length=500)  # 비우면 Windows 기본 마이크
+    mic_volume: int = Field(80, ge=0, le=150)
+    mic_echo: int = Field(30, ge=0, le=100)
 
     @field_validator("bg_files")
     @classmethod

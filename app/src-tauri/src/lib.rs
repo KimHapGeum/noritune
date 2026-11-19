@@ -72,6 +72,35 @@ fn start_engine(app: &tauri::AppHandle) -> Result<(Child, u16), String> {
     }
 }
 
+/// 마이크(기획서 F13): 웹뷰가 묻기만 하고 답을 받지 못해 getUserMedia가 멈췄다.
+/// 우리 화면(tauri.localhost, 개발 서버)에서 온 마이크 요청만 허용하고, 유튜브 배경 같은 다른 곳은 건드리지 않는다
+#[cfg(windows)]
+fn allow_microphone(app: &tauri::App) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        COREWEBVIEW2_PERMISSION_KIND, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
+    };
+    use webview2_com::{take_pwstr, PermissionRequestedEventHandler};
+    const OURS: [&str; 3] = ["http://tauri.localhost/", "https://tauri.localhost/", "http://localhost:1420/"];
+    let Some(win) = app.get_webview_window("main") else { return };
+    let _ = win.with_webview(|wv| unsafe {
+        let Ok(core) = wv.controller().CoreWebView2() else { return };
+        let handler = PermissionRequestedEventHandler::create(Box::new(|_, args| {
+            let Some(args) = args else { return Ok(()) };
+            let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
+            args.PermissionKind(&mut kind)?;
+            let mut uri = windows_core::PWSTR::null();
+            args.Uri(&mut uri)?;
+            let uri = take_pwstr(uri);
+            if kind == COREWEBVIEW2_PERMISSION_KIND_MICROPHONE && OURS.iter().any(|o| uri.starts_with(o)) {
+                args.SetState(COREWEBVIEW2_PERMISSION_STATE_ALLOW)?;
+            }
+            Ok(())
+        }));
+        let mut token = 0i64;
+        let _ = core.add_PermissionRequested(&handler, &mut token);
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
@@ -79,6 +108,8 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(windows)]
+            allow_microphone(app);
             let (child, port) = start_engine(app.handle())?;
             app.manage(Engine { child: Mutex::new(Some(child)), port });
             Ok(())

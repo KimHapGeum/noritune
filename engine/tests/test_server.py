@@ -461,3 +461,10 @@ def test_favorite_and_play_count(client, tmp_path):
     s = client.post(f"/songs/{sid}/played").json()
     assert s["plays"] == 2 and s["last_played"]
     assert client.get("/settings").json()["auto_hide"] is True
+
+
+def test_mic_settings_default_off_and_validated(client):
+    s = client.get("/settings").json()
+    assert (s["mic_on"], s["mic_device"], s["mic_volume"], s["mic_echo"]) == (False, "", 80, 30)
+    assert client.put("/settings", json={**s, "mic_volume": 200}).status_code == 422
+    assert client.put("/settings", json={**s, "mic_on": True, "mic_echo": 50}).json()["mic_echo"] == 50
