@@ -1,0 +1,23 @@
+[project]
+name = "karaoke-engine"
+version = "0.1.0"
+description = "노래방 프로그램의 파이썬 처리기 (곡 관리, 반주 분리, 가사)"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "mutagen>=1.47",
+]
+
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+karaoke-engine = "karaoke_engine.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["karaoke_engine"]

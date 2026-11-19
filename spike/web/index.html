@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<title>반주 비교 시험</title>
+<style>
+  body { font: 18px "Malgun Gothic", sans-serif; background: #111; color: #eee; max-width: 680px; margin: 40px auto; padding: 0 16px; }
+  label { display: block; margin: 16px 0 6px; }
+  input[type=range] { width: 100%; }
+  button { font-size: 16px; padding: 6px 12px; margin: 3px 4px 3px 0; text-align: left; }
+  button.on { background: #2a7; color: #fff; }
+  fieldset { border: 1px solid #444; margin: 16px 0; padding: 8px 14px 14px; }
+  #log { margin-top: 20px; font-size: 14px; color: #9c9; white-space: pre-line; }
+</style>
+<h1>반주 비교 시험</h1>
+<p><button id="start">불러오기 · 재생</button> <button id="pause" disabled>일시정지</button> <button id="preset">추천 설정 (C + I)</button></p>
+<fieldset><legend>키 엔진 (키 ±에서 떨림 비교)</legend>
+  <label style="display:inline"><input type="radio" name="eng" value="st" checked> SoundTouch 기본</label><br>
+  <label style="display:inline"><input type="radio" name="eng" value="st2"> SoundTouch 음악용 설정 (구간 넓힘)</label><br>
+  <label style="display:inline"><input type="radio" name="eng" value="ss"> Signalsmith Stretch (MIT)</label>
+</fieldset>
+<label>위치: <b id="pv">0:00</b></label>
+<input id="pos" type="range" min="0" max="1" step="0.1" value="0">
+
+<fieldset><legend>반주 (분리 시간 · 노래 중 반주가 빈 비율)</legend><div id="sel"></div></fieldset>
+
+<fieldset><legend>코러스 섞기 (반주 위에 더하기)</legend>
+  <div id="csel"></div>
+  <label>코러스 음량: <b id="clv">100</b>%</label>
+  <input id="clevel" type="range" min="0" max="150" step="10" value="100">
+  <label>코러스 고음 깎기: <b id="lpv">끔</b></label>
+  <input id="lp" type="range" min="0" max="5" step="1" value="0">
+  <label style="display:inline"><input id="ccompOn" type="checkbox"> 코러스 전용 컴프레서 (세게: 문턱 -40dB, 8:1)</label>
+  <label>코러스 울림(리버브): <b id="rvv">0</b>%</label>
+  <input id="rv" type="range" min="0" max="100" step="10" value="0">
+  <p style="font-size:14px;color:#aaa">예: 반주 H + 코러스 I = G. 반주 H에 다른 코러스를 골라 휘파람 소리를 비교하세요.</p>
+</fieldset>
+
+<fieldset><legend>효과</legend>
+  <label style="display:inline"><input id="compOn" type="checkbox"> 음량 고르게 펴기 (컴프레서, 반주+코러스에)</label>
+  <label>펴는 세기: <b id="cv">50</b>%</label>
+  <input id="comp" type="range" min="0" max="100" step="10" value="50">
+  <label>가이드 보컬: <b id="gv">0</b>%</label>
+  <input id="guide" type="range" min="0" max="100" step="5" value="0">
+  <label>키: <b id="kv">0</b> 반음</label>
+  <input id="key" type="range" min="-6" max="6" step="1" value="0">
+  <label>속도: <b id="tv">1.00</b>배</label>
+  <input id="tempo" type="range" min="0.7" max="1.3" step="0.05" value="1">
+</fieldset>
+<div id="log"></div>
+<script type="module">
+  import { SoundTouchNode } from './vendor/audio-worklet/index.js';
+  import SignalsmithStretch from './vendor/SignalsmithStretch.mjs';
+  const $ = (id) => document.getElementById(id);
+  const log = (m) => ($('log').textContent += m + '\n');
+  const getJson = async (f, dflt) => { try { return await (await fetch(f, { cache: 'no-store' })).json(); } catch { return dflt; } };
+
+  const TRACKS = await getJson('tracks.json', [{ id: 'A', name: 'Demucs', file: 'track.wav' }]);
+  const CHORUS = [{ id: 'none', name: '코러스 없음' }, ...(await getJson('choruses.json', []))];
+  const LP = [0, 12000, 9000, 7000, 5000, 3500]; // 0 = 끔
+  // 소리 파일은 고를 때 처음 불러온다 (전부 미리 풀면 메모리 1GB 넘음)
+  const FILE = { V: 'guide_vocal.wav' };
+  TRACKS.forEach((t) => (FILE['T' + t.id] = t.file));
+  CHORUS.forEach((c) => c.file && (FILE['C' + c.id] = c.file));
+
+  let ctx, st, ss, pre, engine = 'st', bus, chorusBus, lowpass, comp, makeup, cComp, cOut, wet, tempo = 1;
+
+  // 잔향 길이(초)만큼 점점 작아지는 잡음 = 간단한 리버브 임펄스
+  function makeImpulse(sec) {
+    const n = Math.floor(ctx.sampleRate * sec), b = ctx.createBuffer(2, n, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = b.getChannelData(ch);
+      for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n) ** 3;
+    }
+    return b;
+  }
+  function applyCComp() {
+    if (!lowpass) return;
+    lowpass.disconnect();
+    lowpass.connect($('ccompOn').checked ? cComp : cOut);
+  }
+  const bufs = {}, gains = {}, srcs = {};
+  let curT = 'A', curC = 'none', playing = false, offset = 0, startedAt = 0; // offset: 곡 안의 위치(초)
+  const now = () => (playing ? offset + (ctx.currentTime - startedAt) * tempo : offset);
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+
+  function addButtons(list, box, prefix, onPick, label) {
+    for (const x of list) {
+      const b = document.createElement('button');
+      b.id = prefix + x.id;
+      b.style.display = 'block';
+      b.textContent = label(x);
+      b.onclick = () => ctx && onPick(x.id);
+      $(box).append(b);
+    }
+  }
+  addButtons(TRACKS, 'sel', 'selT', (id) => choose('T', id), (t) => `${t.id}. ${t.name}` + (t.secs ? ` · ${t.secs}초 · ${t.quiet}%` : ''));
+  addButtons(CHORUS, 'csel', 'selC', (id) => choose('C', id), (c) => (c.file ? `${c.id}. ${c.name} · ${c.secs}초` : c.name));
+
+  async function load(key) {
+    if (bufs[key]) return;
+    log(`불러오는 중: ${FILE[key]}`);
+    bufs[key] = await ctx.decodeAudioData(await (await fetch(FILE[key])).arrayBuffer());
+    gains[key] = ctx.createGain();
+    gains[key].gain.value = 0;
+    gains[key].connect(key === 'V' ? pre : key[0] === 'C' ? chorusBus : bus);
+  }
+  function startSrc(key, at) {
+    const s = ctx.createBufferSource();
+    s.buffer = bufs[key];
+    s.playbackRate.value = tempo;
+    s.connect(gains[key]);
+    s.start(0, Math.min(at, bufs[key].duration));
+    srcs[key] = s;
+  }
+  function stopAll() { Object.values(srcs).forEach((s) => s.stop()); for (const k in srcs) delete srcs[k]; }
+  function play(at) {
+    stopAll();
+    Object.keys(bufs).forEach((k) => startSrc(k, at));
+    offset = at; startedAt = ctx.currentTime; playing = true;
+  }
+  function refreshGains() {
+    for (const k in gains) {
+      if (k === 'V') continue;
+      gains[k].gain.value = k === 'T' + curT || k === 'C' + curC ? 1 : 0;
+    }
+    TRACKS.forEach((t) => $('selT' + t.id).classList.toggle('on', t.id === curT));
+    CHORUS.forEach((c) => $('selC' + c.id).classList.toggle('on', c.id === curC));
+  }
+  async function choose(kind, id) {
+    if (kind === 'T') curT = id; else curC = id;
+    const key = kind + id;
+    if (FILE[key] && !bufs[key]) {
+      await load(key);
+      if (playing) startSrc(key, now()); // 지금 위치부터 같이 재생
+    }
+    refreshGains();
+  }
+
+  function applyComp() {
+    if (!bus) return;
+    // 세기 0~100% → 문턱 -10~-40dB, 비율 4:1. 줄어든 만큼의 절반을 보정 음량으로 되돌린다
+    const s = $('comp').value / 100, th = -10 - 30 * s, ratio = 4;
+    comp.threshold.value = th; comp.ratio.value = ratio; comp.knee.value = 6;
+    comp.attack.value = 0.01; comp.release.value = 0.25;
+    makeup.gain.value = 10 ** ((-th * (1 - 1 / ratio) * 0.5) / 20);
+    bus.disconnect();
+    bus.connect($('compOn').checked ? comp : pre);
+  }
+  function applyLp() {
+    const f = LP[$('lp').value];
+    $('lpv').textContent = f ? `${f / 1000}kHz 위 깎기` : '끔';
+    if (lowpass) lowpass.frequency.value = f || 22000;
+  }
+
+  $('start').onclick = async () => {
+    $('start').disabled = true;
+    ctx = new AudioContext();
+    await SoundTouchNode.register(ctx, './vendor/audio-worklet/soundtouch-processor.js');
+    // 모든 소리 → pre → 키 엔진(SoundTouch 또는 Signalsmith) → 스피커
+    pre = ctx.createGain();
+    st = new SoundTouchNode({ context: ctx });
+    st.connect(ctx.destination);
+    ss = await SignalsmithStretch(ctx);
+    ss.connect(ctx.destination);
+    ss.start();
+    setEngine(engine);
+    // 반주 → bus, 코러스 → chorusBus → 고음 깎기 → bus. bus → (컴프레서) → SoundTouch. 가이드 보컬 → SoundTouch
+    bus = ctx.createGain();
+    chorusBus = ctx.createGain();
+    lowpass = ctx.createBiquadFilter();
+    lowpass.type = 'lowpass';
+    // 코러스: chorusBus → 고음 깎기 → (코러스 컴프레서) → cOut → 그대로 bus + 울림(convolver) → bus
+    cComp = ctx.createDynamicsCompressor();
+    cComp.threshold.value = -40; cComp.ratio.value = 8; cComp.attack.value = 0.005; cComp.release.value = 0.4;
+    const cMake = ctx.createGain();
+    cMake.gain.value = 10 ** (17 / 20); // 깎인 만큼 대략 되돌림
+    cComp.connect(cMake);
+    cOut = ctx.createGain();
+    cMake.connect(cOut);
+    cOut.connect(bus);
+    const verb = ctx.createConvolver();
+    verb.buffer = makeImpulse(1.8);
+    wet = ctx.createGain();
+    wet.gain.value = 0;
+    cOut.connect(verb).connect(wet).connect(bus);
+    chorusBus.connect(lowpass);
+    applyCComp();
+    comp = ctx.createDynamicsCompressor();
+    makeup = ctx.createGain();
+    comp.connect(makeup).connect(pre);
+    applyComp(); applyLp();
+    await Promise.all([load('TA'), load('V')]);
+    $('pos').max = bufs.TA.duration;
+    refreshGains();
+    play(0);
+    $('pause').disabled = false;
+    log('재생 중. 처음 고르는 반주·코러스는 불러오느라 1~2초 걸립니다.');
+    setInterval(() => { const t = now(); $('pos').value = t; $('pv').textContent = fmt(t); }, 250);
+  };
+
+  $('pause').onclick = () => {
+    if (playing) { offset = now(); stopAll(); playing = false; $('pause').textContent = '계속'; }
+    else { play(offset); $('pause').textContent = '일시정지'; }
+  };
+  $('pos').onchange = (e) => { if (playing) play(+e.target.value); else offset = +e.target.value; };
+  $('compOn').onchange = applyComp;
+  $('comp').oninput = (e) => { $('cv').textContent = e.target.value; applyComp(); };
+  $('lp').oninput = applyLp;
+  $('ccompOn').onchange = applyCComp;
+  $('rv').oninput = (e) => { $('rvv').textContent = e.target.value; if (wet) wet.gain.value = (e.target.value / 100) * 1.5; };
+  $('clevel').oninput = (e) => { $('clv').textContent = e.target.value; if (chorusBus) chorusBus.gain.value = e.target.value / 100; };
+  $('guide').oninput = (e) => { $('gv').textContent = e.target.value; if (gains.V) gains.V.gain.value = e.target.value / 100; };
+  $('key').oninput = (e) => { $('kv').textContent = e.target.value; applyPitch(); };
+  $('tempo').oninput = (e) => {
+    const t = +e.target.value;
+    $('tv').textContent = t.toFixed(2);
+    if (!ctx) { tempo = t; return; }
+    offset = now(); startedAt = ctx.currentTime; tempo = t; // 위치 계산 기준을 바꾼 시점으로 옮긴다
+    Object.values(srcs).forEach((s) => (s.playbackRate.value = t));
+    applyPitch();
+  };
+
+  // 속도는 재생 속도로 바꾸고(음도 같이 변함), 키 엔진이 그만큼 음높이를 되돌린 뒤 원하는 키를 더한다
+  function applyPitch() {
+    if (!ctx) return;
+    const key = +$('key').value;
+    st.playbackRate.value = tempo;
+    st.pitchSemitones.value = key;
+    ss.schedule({ semitones: key - 12 * Math.log2(tempo) });
+  }
+  const ST_DEFAULT = { sequenceMs: 0, seekWindowMs: 0, overlapMs: 8, quickSeek: true };
+  const ST_MUSIC = { sequenceMs: 100, seekWindowMs: 30, overlapMs: 16, quickSeek: false };
+  function setEngine(e) {
+    engine = e;
+    document.querySelectorAll('input[name=eng]').forEach((r) => (r.checked = r.value === e));
+    if (!ctx) return;
+    pre.disconnect();
+    if (e === 'ss') pre.connect(ss);
+    else { st.setStretchParameters(e === 'st2' ? ST_MUSIC : ST_DEFAULT); pre.connect(st); }
+    applyPitch();
+  }
+  document.querySelectorAll('input[name=eng]').forEach((r) => (r.onchange = () => setEngine(r.value)));
+
+  // 사용자가 고른 조합: 반주 C + 코러스 I 50%, 고음 5kHz 위 깎기, 코러스 컴프레서 끔, 울림 20%, 가이드 15%
+  $('preset').onclick = async () => {
+    if (!ctx) return log('먼저 불러오기 · 재생을 누르세요');
+    const set = (id, v) => { $(id).value = v; $(id).dispatchEvent(new Event('input')); };
+    set('clevel', 50); set('lp', LP.indexOf(5000)); set('rv', 20); set('guide', 15);
+    $('ccompOn').checked = false; applyCComp();
+    await choose('T', 'C'); await choose('C', 'I');
+  };
+</script>
+</html>

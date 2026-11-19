@@ -1,0 +1,41 @@
+:root {
+  --bg: #0e0f14;
+  --panel: #13151c;
+  --line: #23252f;
+  --text: #f2f3f7;
+  --muted: #9aa0b4;
+  --accent: #ff5c8a;
+  --accent-ink: #1a0710;
+  font-family: "Malgun Gothic", "Noto Sans KR", system-ui, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+body { margin: 0; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: #3a3e4e; border-radius: 5px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+::-webkit-scrollbar-button { display: none; }
+
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+.app.dragging { outline: 3px dashed var(--accent); outline-offset: -8px; }
+.top { display: flex; align-items: center; justify-content: space-between; padding: 16px 32px; border-bottom: 1px solid var(--line); }
+.top h1 { margin: 0; font-size: 22px; font-weight: 900; }
+button { font: inherit; color: inherit; cursor: pointer; }
+.primary { height: 44px; padding: 0 20px; border: 0; border-radius: 12px; background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+.primary:disabled { opacity: 0.6; cursor: default; }
+.muted { color: var(--muted); font-weight: 400; }
+.error { display: flex; justify-content: space-between; gap: 12px; margin: 16px 32px 0; padding: 12px 16px; border-radius: 12px; background: #2a1520; border: 1px solid #6b3a48; color: #ffc2d4; white-space: pre-line; }
+.error button { background: none; border: 0; color: inherit; }
+main { flex: 1; padding: 24px 32px; }
+main h2 { margin: 0 0 16px; font-size: 22px; }
+.empty { padding: 48px; border: 2px dashed #2c2f3b; border-radius: 16px; text-align: center; color: var(--muted); }
+.songs { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); overflow: hidden; }
+.songs li + li { border-top: 1px solid #1c1e27; }
+.songs button { width: 100%; display: grid; grid-template-columns: 1fr auto auto; gap: 16px; align-items: center; padding: 14px 20px; background: none; border: 0; text-align: left; }
+.songs button:hover, .songs li.on button { background: #1c1f29; }
+.songs .title { font-weight: 700; font-size: 16px; }
+.chip { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: #1e2a22; color: #9be7b4; }
+.player { display: flex; align-items: center; gap: 24px; padding: 14px 32px; border-top: 1px solid var(--line); background: var(--panel); }
+.player[hidden] { display: none; }
+.player audio { flex: 1; }

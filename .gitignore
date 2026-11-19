@@ -1,0 +1,21 @@
+# 교훈 파일은 올리지 않는다
+Lesson.md
+Lesson-archive.md
+
+# 편집기
+.idea/
+.vscode/
+
+# 빌드 결과 (Rust target·파이썬 가상환경은 OneDrive 밖에 둔다. 혹시 생겨도 올리지 않는다)
+target/
+.venv/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 시험용 소리 파일
+*.wav
+*.mp3
+*.flac
