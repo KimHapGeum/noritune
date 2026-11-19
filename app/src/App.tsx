@@ -1,23 +1,57 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { addSong, audioUrl, listSongs, type Song } from "./api";
+import { addSong, decideSong, listSongs, MODES, retrySong, type Mode, type Song } from "./api";
+import Player from "./Player";
 import "./App.css";
 
 const AUDIO_EXTS = ["mp3", "wav", "flac", "m4a", "ogg", "opus"];
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+const busy = (s: Song) => s.status === "queued" || s.status === "checking" || s.status === "separating";
 
 export default function App() {
   const [songs, setSongs] = useState<Song[]>([]);
   const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [mode, setMode] = useState<Mode>("빠른 분리");
   const [playing, setPlaying] = useState<Song | null>(null);
-  const audio = useRef<HTMLAudioElement>(null);
   const [update, setUpdate] = useState<Update | null>(null);
   const [updating, setUpdating] = useState(false);
+
+  const refresh = () => listSongs().then(setSongs).catch((e) => setError(String(e.message ?? e)));
+
+  async function addPaths(paths: string[], m: Mode) {
+    setAdding(true);
+    setError("");
+    const failed: string[] = [];
+    for (const p of paths) {
+      try {
+        await addSong(p, m);
+      } catch (e) {
+        failed.push(`${p.split(/[\\/]/).pop()}: ${(e as Error).message}`);
+      }
+    }
+    setAdding(false);
+    if (failed.length) setError(failed.join("\n"));
+    refresh();
+  }
+
+  async function pickFiles() {
+    const picked = await open({ multiple: true, filters: [{ name: "노래 파일", extensions: AUDIO_EXTS }] });
+    if (picked) addPaths(Array.isArray(picked) ? picked : [picked], mode);
+  }
+
+  async function act(fn: () => Promise<unknown>) {
+    try {
+      await fn();
+      refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
 
   async function installUpdate() {
     if (!update) return;
@@ -31,56 +65,46 @@ export default function App() {
     }
   }
 
-  const refresh = () => listSongs().then(setSongs).catch((e) => setError(String(e.message ?? e)));
-
-  async function addPaths(paths: string[]) {
-    setBusy(true);
-    setError("");
-    const failed: string[] = [];
-    for (const p of paths) {
-      try {
-        await addSong(p);
-      } catch (e) {
-        failed.push(`${p.split(/[\\/]/).pop()}: ${(e as Error).message}`);
-      }
-    }
-    setBusy(false);
-    if (failed.length) setError(failed.join("\n"));
-    refresh();
-  }
-
-  async function pickFiles() {
-    const picked = await open({ multiple: true, filters: [{ name: "노래 파일", extensions: AUDIO_EXTS }] });
-    if (picked) addPaths(Array.isArray(picked) ? picked : [picked]);
-  }
-
-  async function play(song: Song) {
-    setPlaying(song);
-    const el = audio.current!;
-    el.src = await audioUrl(song.id);
-    el.play().catch((e) => setError(`재생하지 못했어요: ${e.message}`));
-  }
-
   useEffect(() => {
     refresh();
     // 켤 때 새 버전 확인. 인터넷이 없거나 개발판이면 조용히 넘어간다
     check().then(setUpdate).catch(() => {});
-    // 창에 파일을 끌어다 놓으면 곡 추가
+  }, []);
+
+  // 끌어다 놓기는 지금 고른 반주 방식으로 추가한다
+  useEffect(() => {
     const off = getCurrentWebview().onDragDropEvent((e) => {
-      if (e.payload.type === "enter" || e.payload.type === "over") setDragging(true);
-      else setDragging(false);
-      if (e.payload.type === "drop") addPaths(e.payload.paths);
+      setDragging(e.payload.type === "enter" || e.payload.type === "over");
+      if (e.payload.type === "drop") addPaths(e.payload.paths, mode);
     });
     return () => void off.then((f) => f());
-  }, []);
+  }, [mode]);
+
+  // 반주를 만드는 곡이 있는 동안 1.5초마다 상태를 새로 받는다
+  const anyBusy = songs.some(busy);
+  useEffect(() => {
+    if (!anyBusy) return;
+    const t = setInterval(refresh, 1500);
+    return () => clearInterval(t);
+  }, [anyBusy]);
 
   return (
     <div className={`app${dragging ? " dragging" : ""}`}>
       <header className="top">
         <h1>Noritune</h1>
-        <button className="primary" onClick={pickFiles} disabled={busy}>
-          {busy ? "추가하는 중…" : "+ 곡 추가"}
-        </button>
+        <div className="actions">
+          <label className="mode">
+            반주 만들기
+            <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
+              {MODES.map((m) => (
+                <option key={m}>{m}</option>
+              ))}
+            </select>
+          </label>
+          <button className="primary" onClick={pickFiles} disabled={adding}>
+            {adding ? "추가하는 중…" : "+ 곡 추가"}
+          </button>
+        </div>
       </header>
 
       {update && (
@@ -89,7 +113,7 @@ export default function App() {
           <button className="primary" onClick={installUpdate} disabled={updating}>
             {updating ? "받는 중…" : "업데이트"}
           </button>
-          <button aria-label="다음에 하기" onClick={() => setUpdate(null)} disabled={updating}>나중에</button>
+          <button onClick={() => setUpdate(null)} disabled={updating}>나중에</button>
         </div>
       )}
 
@@ -110,23 +134,42 @@ export default function App() {
           <ul className="songs">
             {songs.map((s) => (
               <li key={s.id} className={playing?.id === s.id ? "on" : ""}>
-                <button onClick={() => play(s)}>
-                  <span className="title">{s.title}</span>
-                  <span className="muted">{s.artist || "가수 모름"} · {fmt(s.duration)}</span>
-                  <span className="chip">{s.mode}</span>
+                <button className="row" onClick={() => setPlaying(s)} disabled={s.status !== "ready"}>
+                  <span>
+                    <span className="title">{s.title}</span>
+                    <span className="muted"> {s.artist || "가수 모름"} · {fmt(s.duration)}</span>
+                  </span>
+                  <span className={`chip mode-${MODES.indexOf(s.mode)}`}>{s.mode}</span>
+                  <span className="status">
+                    {s.status === "ready" && <span className="ok">준비됨</span>}
+                    {s.status === "queued" && <span className="muted">기다리는 중</span>}
+                    {s.status === "checking" && <span className="muted">반주인지 확인하는 중</span>}
+                    {s.status === "confirm" && <span className="ask">반주 같아요. 분리할까요?</span>}
+                    {s.status === "separating" && (
+                      <>
+                        반주 만드는 중 {Math.round((s.progress ?? 0) * 100)}%
+                        <span className="bar"><span style={{ width: `${(s.progress ?? 0) * 100}%` }} /></span>
+                      </>
+                    )}
+                    {s.status === "failed" && <span className="fail" title={s.error ?? ""}>반주를 만들지 못했어요</span>}
+                  </span>
                 </button>
+                {s.status === "failed" && (
+                  <button className="retry" onClick={() => act(() => retrySong(s.id))}>다시 시도</button>
+                )}
+                {s.status === "confirm" && (
+                  <span className="decide">
+                    <button className="primary" onClick={() => act(() => decideSong(s.id, "keep"))}>분리 없이 쓰기</button>
+                    <button onClick={() => act(() => decideSong(s.id, "separate"))}>그래도 분리</button>
+                  </span>
+                )}
               </li>
             ))}
           </ul>
         )}
       </main>
 
-      <footer className="player" hidden={!playing}>
-        <div>
-          <b>{playing?.title}</b> <span className="muted">{playing?.artist}</span>
-        </div>
-        <audio ref={audio} controls />
-      </footer>
+      {playing && <Player key={playing.id} song={playing} onError={setError} />}
     </div>
   );
 }

@@ -10,6 +10,13 @@ from pathlib import Path
 import mutagen
 
 AUDIO_EXTS = {".mp3", ".wav", ".flac", ".m4a", ".ogg", ".opus"}
+# 반주 방식. 분리하는 방식은 작업 줄(worker)이 뒤에서 처리한다
+MODES_READY = {"반주 그대로", "원곡 그대로"}
+MODES_SEPARATE = {"빠른 분리", "고품질 분리"}
+MODES = MODES_READY | MODES_SEPARATE
+# 곡 상태: ready(부를 수 있음) / queued(기다림) / checking(반주인지 검사) / confirm(반주 같아 사용자에게 물음)
+#          / separating(만드는 중) / failed(실패)
+BUSY = {"queued", "checking", "separating"}
 
 
 class LibraryError(ValueError):
@@ -28,7 +35,10 @@ class Library:
     def _load(self) -> list[dict]:
         if not self.index.exists():
             return []
-        return json.loads(self.index.read_text(encoding="utf-8"))["songs"]
+        songs = json.loads(self.index.read_text(encoding="utf-8"))["songs"]
+        for s in songs:  # 1단계에서 만든 곡에는 상태가 없다
+            s.setdefault("status", "ready")
+        return songs
 
     def _save(self) -> None:
         # 임시 파일에 다 쓴 뒤 바꿔치기: 쓰다가 꺼져도 기존 목록이 깨지지 않는다
@@ -42,16 +52,35 @@ class Library:
 
     def get(self, song_id: str) -> dict:
         with self._lock:
-            for s in self._songs:
-                if s["id"] == song_id:
-                    return dict(s)
+            return dict(self._find(song_id))
+
+    def _find(self, song_id: str) -> dict:
+        for s in self._songs:
+            if s["id"] == song_id:
+                return s
         raise KeyError(song_id)
 
-    def audio_path(self, song_id: str) -> Path:
-        song = self.get(song_id)
-        return self.songs_dir / song["id"] / song["file"]
+    def update(self, song_id: str, **fields) -> dict:
+        with self._lock:
+            song = self._find(song_id)
+            song.update(fields)
+            self._save()
+            return dict(song)
 
-    def add_file(self, src: str) -> dict:
+    def folder(self, song_id: str) -> Path:
+        return self.songs_dir / self.get(song_id)["id"]
+
+    def audio_path(self, song_id: str, part: str = "original") -> Path:
+        """part: original(받은 원곡) / instrumental(반주) / vocals(가이드 보컬)."""
+        song = self.get(song_id)
+        name = song["file"] if part == "original" else (song.get("stems") or {}).get(part)
+        if not name:
+            raise KeyError(part)
+        return self.songs_dir / song["id"] / name
+
+    def add_file(self, src: str, mode: str = "빠른 분리") -> dict:
+        if mode not in MODES:
+            raise LibraryError(f"알 수 없는 반주 방식이에요 ({mode})")
         path = Path(src)
         if not path.is_file():
             raise LibraryError("파일을 찾을 수 없어요")
@@ -80,7 +109,9 @@ class Library:
             "artist": first("artist"),
             "duration": round(float(info.info.length), 2),
             "file": file_name,
-            "mode": "반주 그대로",  # 1단계: 분리 없이 그대로 재생
+            "mode": mode,
+            "status": "queued" if mode in MODES_SEPARATE else "ready",
+            "progress": 0.0,
             "source": {"kind": "file", "name": path.name},
             "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
