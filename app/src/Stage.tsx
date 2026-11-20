@@ -135,7 +135,7 @@ export default function Stage({ song, settings, heardPos, tempo, playing, lyrics
   const seed = parseInt(song.id.slice(0, 6), 16);
   const custom = fileUrls.length ? <FilesBg urls={fileUrls} interval={settings.bg_interval} seed={seed} /> : <DefaultBg />;
   let bg: ReactNode;
-  if (karaoke) bg = <video ref={video} className="bg-media" src={videoSrc} muted playsInline preload="auto" />;
+  if (karaoke) bg = <video ref={video} className="bg-media fit" src={videoSrc} muted playsInline preload="auto" />;
   else if (p.bg_kind === "default") bg = <DefaultBg />;
   else if (p.bg_kind === "youtube" && p.bg_value) bg = <OneYoutubeBg key={p.bg_value} id={p.bg_value} />;
   else if (p.bg_kind === "file" && songFile) bg = <FilesBg key={songFile} urls={[{ url: songFile, video: isVideo(p.bg_value ?? "") }]} interval={0} seed={0} />;
