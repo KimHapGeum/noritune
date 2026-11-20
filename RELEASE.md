@@ -26,3 +26,11 @@
 6. 공개 저장소에 릴리스: `gh release create v<버전> <설치파일.exe> latest.json -R KimHapGeum/noritune-update -t "Noritune <버전>" -n "<바뀐 내용>"`
    설치 파일과 latest.json을 같은 릴리스에 함께 올린다 (latest.json의 주소가 그 릴리스를 가리킨다)
 7. 공개 저장소에 커밋할 일이 있으면 GitHub 비공개용 메일 `268497351+KimHapGeum@users.noreply.github.com`으로 커밋한다
+
+## 업데이트를 공개하지 않고 시험하기
+1. 덮어쓰기 설정 두 개: `{"version":"0.1.0","plugins":{"updater":{"endpoints":["http://127.0.0.1:8765/latest.json"],"dangerousInsecureTransportProtocol":true}}}` 와 버전만 0.1.1인 것 (http 주소는 `dangerousInsecureTransportProtocol` 없이는 거부된다)
+2. 각각 `npx tauri build --config <파일>`로 빌드 (저장소 설정은 그대로), 0.1.0을 `/S`로 설치
+3. 0.1.1 설치 파일을 둔 폴더에서 `make_latest_json.py`로 latest.json을 만들고 url을 `http://127.0.0.1:8765/<설치파일>`로 바꾼 뒤 `python -m http.server 8765 --bind 127.0.0.1`
+4. 앱을 켜서 "업데이트" → 0.1.1로 다시 켜지는지, 받은 부품을 다시 받지 않는지, 옛 처리기가 남지 않는지 본다
+5. 끝나면 정상 설정으로 다시 빌드해 설치해 둔다 (시험판은 이 PC 주소만 본다)
+2026-11-20 시험: 업데이트 누르고 14초 만에 0.1.1로 다시 켜짐, 곡·부품 그대로
