@@ -1,5 +1,6 @@
 """가사 (기획서 F4): 인터넷(LRCLIB) 후보 찾기, LRC 읽고 쓰기, 음성 인식 자동 생성."""
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
@@ -12,17 +13,37 @@ HALLUCINATIONS = ["다음 영상에서 만나요", "시청해 주셔서", "구�
 
 
 def parse_lrc(text: str) -> list[dict]:
-    """'[mm:ss.xx] 가사' 줄들을 [{"t": 초, "text": 가사}]로. 시간 없는 줄과 빈 가사는 뺀다."""
-    lines = []
+    """'[mm:ss.xx] 가사' 줄들을 [{"t": 시작초, "text": 가사, "e": 끝초(있으면)}]로.
+    가사 없이 시간만 있는 줄은 바로 앞 줄이 끝나는 때로 읽는다 (LRC에서 흔한 쓰는 법)."""
+    marks = []
     for raw in text.splitlines():
         m = _LINE.match(raw.strip())
-        if m and m.group(3).strip():
-            lines.append({"t": round(int(m.group(1)) * 60 + float(m.group(2)), 2), "text": m.group(3).strip()})
-    return sorted(lines, key=lambda x: x["t"])
+        if m:
+            marks.append((round(int(m.group(1)) * 60 + float(m.group(2)), 2), m.group(3).strip()))
+    marks.sort(key=lambda x: x[0])
+    lines: list[dict] = []
+    for t, txt in marks:
+        if txt:
+            lines.append({"t": t, "text": txt})
+        elif lines and "e" not in lines[-1] and t > lines[-1]["t"]:
+            lines[-1]["e"] = t
+    return lines
+
+
+def _ts(t: float) -> str:
+    return f"[{int(t // 60):02d}:{t % 60:05.2f}]"
 
 
 def to_lrc(lines: list[dict]) -> str:
-    return "\n".join(f"[{int(x['t'] // 60):02d}:{x['t'] % 60:05.2f}] {x['text']}" for x in lines) + "\n"
+    """끝 시간이 있으면 다음 줄 시작 전에 빈 시간 줄로 적는다 (다른 플레이어도 그대로 읽는다)"""
+    out = []
+    for i, x in enumerate(lines):
+        out.append(f"{_ts(x['t'])} {x['text']}")
+        e = x.get("e")
+        nxt = lines[i + 1]["t"] if i + 1 < len(lines) else None
+        if e is not None and e > x["t"] and (nxt is None or e < nxt):
+            out.append(_ts(e))
+    return "\n".join(out) + "\n"
 
 
 def _get(params: dict) -> list[dict]:
@@ -109,6 +130,10 @@ def auto(src: Path) -> list[dict]:
         n = int(len(audio) * 16000 / sr)
         audio16 = np.interp(np.linspace(0, len(audio) - 1, n), np.arange(len(audio)), audio).astype("float32")
         if _model is None:
+            # faster-whisper(ctranslate2)는 cuBLAS·cuDNN을 PATH에서 찾는다. PyTorch에 들어 있는 것을 쓰게 한다
+            # (개발 PC는 다른 앱이 PATH에 넣어 둬서 됐지만, 다른 PC에서는 "cublas64_12.dll is not found")
+            import torch
+            os.environ["PATH"] = str(Path(torch.__file__).parent / "lib") + os.pathsep + os.environ.get("PATH", "")
             try:
                 _model = WhisperModel("large-v3-turbo", device="cuda", compute_type="float16")
             except Exception:
@@ -140,12 +165,12 @@ def split_words(words: list[tuple[float, float, str]], gap: float = 0.6) -> list
             continue
         length = sum(len(x) for x in cur)
         if cur and (st - last_end > gap or length + len(w) > MAX_LINE):
-            lines.append({"t": round(start, 2), "text": " ".join(cur)})
+            lines.append({"t": round(start, 2), "text": " ".join(cur), "e": round(last_end, 2)})
             cur = []
         if not cur:
             start = st
         cur.append(w)
         last_end = en
     if cur:
-        lines.append({"t": round(start, 2), "text": " ".join(cur)})
+        lines.append({"t": round(start, 2), "text": " ".join(cur), "e": round(last_end, 2)})
     return lines

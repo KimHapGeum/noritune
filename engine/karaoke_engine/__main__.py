@@ -13,8 +13,9 @@ from .server import create_app
 
 
 def default_data_dir() -> Path:
-    # KARAOKE_DATA_DIR: 시험할 때 실제 저장 폴더 대신 쓸 곳
-    return Path(os.environ.get("KARAOKE_DATA_DIR") or Path.home() / "Documents" / "Noritune")
+    from .config import data_dir
+
+    return data_dir()
 
 
 def main() -> None:
@@ -37,6 +38,22 @@ def main() -> None:
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     logging.getLogger().addHandler(handler)
     logging.getLogger().setLevel(logging.INFO)
+
+    app_pid = os.environ.get("NORITUNE_APP_PID")
+    if app_pid and os.name == "nt":
+        # 앱이 어떻게 꺼지든(강제 종료 포함) 따라 꺼진다. 가상환경 python.exe는 진짜 파이썬을 띄우는 껍데기라
+        # 앱이 껍데기만 끄면 처리기가 남았다. (stdin을 읽어 기다리면 Windows에서 다른 스레드가 멈춰서 프로세스를 기다린다)
+        import ctypes
+        import threading
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x00100000, False, int(app_pid))  # SYNCHRONIZE
+        if handle:
+            def _exit_with_app() -> None:
+                kernel32.WaitForSingleObject(handle, 0xFFFFFFFF)
+                os._exit(0)
+
+            threading.Thread(target=_exit_with_app, daemon=True).start()
 
     app = create_app(args.data_dir)
     app.state.weekly_ytdlp()

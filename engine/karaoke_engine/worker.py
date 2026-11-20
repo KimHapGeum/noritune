@@ -61,7 +61,7 @@ class Worker:
 
     def enqueue_lyrics(self, song_id: str) -> None:
         """음성 인식으로 가사 만들기. 그래픽카드를 쓰므로 분리와 같은 줄에 선다."""
-        self.lib.update(song_id, lyrics={"state": "generating"})
+        self.lib.update(song_id, lyrics={"state": "generating"})  # pick(-1)은 여기서 지워진다 (다시 만들지 않게)
         self.q.put(("lyrics", song_id))
 
     def _run(self) -> None:
@@ -80,6 +80,8 @@ class Worker:
             song = self.lib.get(song_id)
         except KeyError:
             return
+        if not song.get("file") or song["status"] != "ready":
+            return  # 아직 받거나 만드는 중: 준비되면 _ready_lyrics가 다시 줄에 세운다
         folder = self.lib.folder(song_id)
         src = folder / ((song.get("stems") or {}).get("vocals") or song["file"])  # 분리한 목소리가 있으면 그것으로
         try:
@@ -95,6 +97,11 @@ class Worker:
 
         (folder / "lyrics.lrc").write_text(to_lrc(lines), encoding="utf-8")
         self.lib.update(song_id, lyrics={"state": "auto"})
+
+    def _ready_lyrics(self, song_id: str) -> None:
+        """곡 추가 때 '가사 자동 생성'을 골랐으면, 곡이 준비된 지금 만든다"""
+        if (self.lib.get(song_id).get("lyrics") or {}).get("pick") == -1:
+            self.enqueue_lyrics(song_id)
 
     def _one(self, song_id: str) -> None:
         try:
@@ -142,6 +149,7 @@ class Worker:
             last[0] = 0.0
             if song["mode"] not in self.separators:
                 self.lib.update(song_id, status="ready", progress=1.0)
+                self._ready_lyrics(song_id)
                 return
         src = folder / song["file"]
 
@@ -173,3 +181,4 @@ class Worker:
                 self.lib.update(song_id, status="failed", error=str(e) or e.__class__.__name__, notice=None)
                 return
         self.lib.update(song_id, status="ready", progress=1.0, stems=stems, error=None, notice=None)
+        self._ready_lyrics(song_id)

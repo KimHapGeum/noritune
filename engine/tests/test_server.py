@@ -576,3 +576,69 @@ def test_ytdlp_update_records_time(tmp_path):
     assert checked > 0
     c.put("/settings", json={"ytdlp_checked": 0, "onboarded": True})  # 화면이 예전 값을 보내도
     assert c.get("/settings").json()["ytdlp_checked"] == checked
+
+
+def test_move_storage_copies_then_points_config(tmp_path, monkeypatch):
+    import json
+    monkeypatch.delenv("KARAOKE_DATA_DIR", raising=False)
+    monkeypatch.setenv("NORITUNE_CONFIG", str(tmp_path / "config.json"))
+    old = tmp_path / "old"
+    c, w = make_client(old)
+    sid = c.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "원곡 그대로"}).json()["id"]
+    (tmp_path / "busy").mkdir()
+    (tmp_path / "busy" / "x.txt").write_text("x")
+    assert c.post("/storage/move", json={"path": str(tmp_path / "busy")}).status_code == 400  # 빈 폴더만
+    assert c.post("/storage/move", json={"path": str(old / "inside")}).status_code == 400
+    r = c.post("/storage/move", json={"path": str(tmp_path / "new")}).json()
+    assert r["restart"] is True
+    assert (tmp_path / "new" / "songs" / sid).is_dir() and (tmp_path / "new" / "library.json").exists()
+    assert not (old / "songs").exists()
+    assert json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))["data_dir"] == str((tmp_path / "new").resolve())
+    from karaoke_engine.config import data_dir
+    assert data_dir() == (tmp_path / "new").resolve()
+
+
+def test_lyrics_editor_saves_end_times(client, tmp_path):
+    LYRICS["cands"] = []
+    sid = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "mode": "원곡 그대로"}).json()["id"]
+    wait_lyrics(client, sid)
+    body = {"lines": [{"t": 1, "text": "가", "e": 2.5}, {"t": 5, "text": "나", "e": 4}, {"t": 8, "text": "다"}]}
+    client.put(f"/songs/{sid}/lyrics", json=body)
+    assert client.get(f"/songs/{sid}/lyrics").json()["lines"] == [
+        {"t": 1.0, "text": "가", "e": 2.5}, {"t": 5.0, "text": "나"}, {"t": 8.0, "text": "다"}]  # 시작보다 이른 끝은 버린다
+
+
+def test_add_song_with_info_gender_and_lyrics_pick(client, tmp_path):
+    LYRICS["cands"] = [cand(1, recommended=True), cand(2)]
+    src = make_wav(tmp_path / "a.wav")
+    assert client.get("/probe", params={"path": str(src)}).json()["title"] == "a"
+    assert client.get("/probe", params={"path": str(tmp_path / "없음.wav")}).status_code == 400
+    assert [c["id"] for c in client.get("/lyrics/search", params={"title": "밤편지", "artist": "아이유"}).json()["candidates"]] == [1, 2]
+    song = client.post("/songs", json={"path": str(src), "mode": "원곡 그대로", "title": "밤편지", "artist": "아이유",
+                                       "gender": "female", "lyrics_pick": 2}).json()
+    assert (song["title"], song["artist"], song["gender"]) == ("밤편지", "아이유", "female")
+    assert wait_lyrics(client, song["id"]) == "internet"  # 미리 고른 후보로 바로
+    assert client.get(f"/songs/{song['id']}").json()["lyrics"]["candidate_id"] == 2
+
+
+def test_storage_kinds_and_default_mode(client, tmp_path):
+    sid = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav"))}).json()["id"]
+    wait(client.worker)
+    st = client.get("/storage").json()
+    assert st["kinds"]["stems"] > 0 and st["kinds"]["original"] > 0 and st["songs"][0]["stems_bytes"] > 0
+    s = client.get("/settings").json()
+    assert s["default_mode"] == "빠른 분리" and s["ytdlp_auto"] is True
+    assert client.get("/system").json()["models"] == {"quick": False, "hq": False}
+
+
+def test_auto_lyrics_chosen_at_add_runs_when_ready(client, tmp_path, sample):
+    LYRICS["cands"] = [cand(1, recommended=True)]
+    song = client.post("/songs", json={"path": str(make_wav(tmp_path / "a.wav")), "lyrics_pick": -1}).json()
+    assert song["lyrics"]["state"] == "generating"  # 찾지 않고 기다린다
+    wait(client.worker)  # 분리 → 준비 → 자동 생성
+    wait(client.worker)
+    assert client.get(f"/songs/{song['id']}/lyrics").json() == {"state": "auto", "lines": [{"t": 1.0, "text": "자동으로 만든 가사"}]}
+    yt = add_yt(client, "우주를 줄게 (Inst.)", lyrics_pick=-1).json()  # 받은 뒤 바로 준비되는 곡도
+    wait(client.worker)
+    wait(client.worker)
+    assert client.get(f"/songs/{yt['id']}").json()["lyrics"]["state"] == "auto"

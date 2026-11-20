@@ -104,7 +104,7 @@ class Library:
         return self.songs_dir / song["id"] / name
 
     def add_youtube(self, vid: str, video_title: str, title: str, artist: str, duration: float,
-                    mode: str = "빠른 분리", lyrics_in_video: str | None = None) -> dict:
+                    mode: str = "빠른 분리", lyrics_in_video: str | None = None, gender: str | None = None) -> dict:
         """유튜브 곡을 '받는 중'으로 올린다. 실제 받기는 작업 줄이 한다.
 
         영상 제목으로 나눠 처리한다 (기획서 F12): 노래방 영상은 영상까지 받고 앱 가사를 끈다.
@@ -141,15 +141,16 @@ class Library:
             "want_video": with_video,
             "source": {"kind": "youtube", "id": vid, "title": video_title, "type": kind},
             "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            **({"gender": gender} if gender else {}),
         }
         with self._lock:
             self._songs.append(song)
             self._save()
         return dict(song)
 
-    def add_file(self, src: str, mode: str = "빠른 분리") -> dict:
-        if mode not in MODES:
-            raise LibraryError(f"알 수 없는 반주 방식이에요 ({mode})")
+    @staticmethod
+    def probe(src: str) -> tuple[Path, object, dict]:
+        """넣기 전에 파일을 읽어 본다: (경로, mutagen 정보, {title, artist, duration}). 못 읽으면 LibraryError"""
         path = Path(src)
         if not path.is_file():
             raise LibraryError("파일을 찾을 수 없어요")
@@ -162,6 +163,17 @@ class Library:
             info = None
         if info is None or not getattr(info, "info", None):
             raise LibraryError("이 파일은 열 수 없어요 (손상되었거나 지원하지 않는 형식)")
+        tags = info.tags or {}
+        first = lambda key: (tags.get(key) or [""])[0].strip()  # noqa: E731
+        return path, info, {"title": first("title") or path.stem, "artist": first("artist"),
+                            "duration": round(float(info.info.length), 2)}
+
+    def add_file(self, src: str, mode: str = "빠른 분리", title: str | None = None, artist: str | None = None,
+                 gender: str | None = None) -> dict:
+        if mode not in MODES:
+            raise LibraryError(f"알 수 없는 반주 방식이에요 ({mode})")
+        path, info, meta = self.probe(src)
+        ext = path.suffix.lower()
 
         song_id = uuid.uuid4().hex
         folder = self.songs_dir / song_id
@@ -170,19 +182,18 @@ class Library:
         # 원본은 건드리지 않고 저장 폴더로 복사한다
         shutil.copy2(path, folder / file_name)
 
-        tags = info.tags or {}
-        first = lambda key: (tags.get(key) or [""])[0].strip()  # noqa: E731
         song = {
             "id": song_id,
-            "title": first("title") or path.stem,
-            "artist": first("artist"),
-            "duration": round(float(info.info.length), 2),
+            "title": (title or "").strip() or meta["title"],
+            "artist": meta["artist"] if artist is None else artist.strip(),
+            "duration": meta["duration"],
             "file": file_name,
             "mode": mode,
             "status": "queued" if mode in MODES_SEPARATE else "ready",
             "progress": 0.0,
             "source": {"kind": "file", "name": path.name},
             "added_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            **({"gender": gender} if gender else {}),
         }
         with self._lock:
             self._songs.append(song)

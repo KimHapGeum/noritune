@@ -100,9 +100,9 @@ function MvBg({ song, fallback }: { song: Song; fallback: ReactNode }) {
  * 노래방 화면 (기획서 F6·F11·F12): 배경 위에 가사.
  * 노래방 영상을 받아 둔 곡은 앱 가사를 끄면 그 영상을 노래에 맞춰 화면 전체에 띄운다 (어둡게 0%).
  */
-export default function Stage({ song, settings, heardPos, tempo, playing, lyricsOn, children, top, topProps }: {
+export default function Stage({ song, settings, heardPos, tempo, playing, lyricsOn, children, top, topProps, bottom }: {
   song: Song; settings: Settings; heardPos: number; tempo: number; playing: boolean; lyricsOn: boolean;
-  children: ReactNode; top: ReactNode; topProps?: HTMLAttributes<HTMLDivElement>;
+  children: ReactNode; top: ReactNode; topProps?: HTMLAttributes<HTMLDivElement>; bottom?: ReactNode;
 }) {
   const p = song.prefs ?? {};
   const karaoke = !!song.video && !lyricsOn;
@@ -147,8 +147,12 @@ export default function Stage({ song, settings, heardPos, tempo, playing, lyrics
     <div className="stage">
       <div className="stage-bg">{bg}</div>
       <div className="stage-dim" style={{ opacity: karaoke ? 0 : settings.bg_dim / 100 }} />
-      <div className="stage-top" {...topProps}>{top}</div>
-      <div className="stage-lyrics">{children}</div>
+      {/* 시안 2번: 배경은 화면 전체, 그 위에 머리줄 · 가운데(가사) · 아래(진행 바 · 버튼 줄) */}
+      <div className="stage-ui">
+        <header className="stage-top" {...topProps}>{top}</header>
+        <main className="stage-main">{children}</main>
+        {bottom}
+      </div>
     </div>
   );
 }

@@ -29,7 +29,7 @@ class LyricsService:
         folder = self.lib.folder(song_id)
         return folder / "lyrics.lrc", folder / "lyrics_candidates.json"
 
-    def on_added(self, song: dict, source_file: str | None = None) -> None:
+    def on_added(self, song: dict, source_file: str | None = None, pick: int | None = None) -> None:
         """곡을 추가했을 때: 노래방 영상은 끄고, 곡 옆에 .lrc가 있으면 그것을, 아니면 인터넷에서 찾는다."""
         if song.get("app_lyrics") is False:
             self.lib.update(song["id"], lyrics={"state": "off"})
@@ -40,10 +40,14 @@ class LyricsService:
                 shutil.copyfile(side, self._paths(song["id"])[0])
                 self.lib.update(song["id"], lyrics={"state": "file"})
                 return
-        self.start(song["id"])
+        if pick == -1:  # 자동 생성을 골랐다: 찾지 않고, 곡이 준비되면 작업 줄이 만든다
+            self.lib.update(song["id"], lyrics={"state": "generating", "pick": -1})
+            return
+        self.start(song["id"], pick=pick)
 
-    def start(self, song_id: str, title: str | None = None, artist: str | None = None) -> None:
-        self.lib.update(song_id, lyrics={"state": "searching"})
+    def start(self, song_id: str, title: str | None = None, artist: str | None = None, pick: int | None = None) -> None:
+        """pick: 곡 추가 화면에서 미리 고른 후보 번호 (LRCLIB id). 찾은 뒤 그 후보가 있으면 바로 고른다"""
+        self.lib.update(song_id, lyrics={"state": "searching", **({"pick": pick} if pick is not None else {})})
         self.pool.submit(self._search, song_id, title, artist)
 
     def _search(self, song_id: str, title: str | None, artist: str | None) -> None:
@@ -62,6 +66,11 @@ class LyricsService:
         prev = self.lib.get(song_id).get("lyrics") or {}
         if prev.get("state") != "searching":
             return  # 그사이 사용자가 고르거나 자동 생성을 시작했다
+        chosen = next((c for c in cands if c["id"] == prev.get("pick") and c.get("synced")), None)
+        if chosen:
+            lrc.write_text(to_lrc(chosen["lines"]), encoding="utf-8")
+            self.lib.update(song_id, lyrics={"state": "internet", "candidate_id": chosen["id"]})
+            return
         state = "review" if cands else ("none" if not lrc.exists() else prev.get("state", "none"))
         self.lib.update(song_id, lyrics={"state": state, "candidate_id": rec["id"] if rec else None})
 
@@ -88,8 +97,13 @@ class LyricsService:
         if state == "generating":
             raise ValueError("가사를 만드는 중이에요. 다 만든 뒤에 고쳐 주세요")
         lrc = self._paths(song_id)[0]
-        lines = sorted(({"t": round(x["t"], 2), "text": x["text"].strip()} for x in lines if x["text"].strip()),
-                       key=lambda x: x["t"])
+        def clean(x: dict) -> dict:
+            line = {"t": round(x["t"], 2), "text": x["text"].strip()}
+            if x.get("e") is not None and x["e"] > x["t"]:  # 끝 시간은 시작보다 뒤일 때만
+                line["e"] = round(x["e"], 2)
+            return line
+
+        lines = sorted((clean(x) for x in lines if x["text"].strip()), key=lambda x: x["t"])
         if not lines:
             lrc.unlink(missing_ok=True)
             self.lib.update(song_id, lyrics={"state": "none"})

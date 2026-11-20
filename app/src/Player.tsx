@@ -2,35 +2,41 @@ import { useEffect, useRef, useState } from "react";
 import { open as openFile } from "@tauri-apps/plugin-dialog";
 import { audioUrl, getLyrics, savePrefs, type Gender, type LyricLine, type Part, type Prefs, type Settings, type Song } from "./api";
 import Stage from "./Stage";
-import { interludeTarget, verseEnd } from "./verse";
+import { interludes, interludeTarget, verseEnd } from "./verse";
+import MixPanel from "./MixPanel";
+import { BackIcon, ImageIcon, JumpIcon, LinesIcon, PauseIcon, PenIcon, PlayIcon, RestartIcon, SkipIcon, SlidersIcon, StopIcon, VideoIcon } from "./icons";
 import { sendTv } from "./Tv";
 import LyricsEditor from "./LyricsEditor";
 import SignalsmithStretch from "./vendor/SignalsmithStretch.mjs";
 
-/** 지금 부르는 줄(크게, 부른 만큼 색이 차오름)과 다음 줄을 보여 준다. */
+/** 지금 부르는 줄(크게, 부른 만큼 색이 차오름)과 앞뒤 줄 (시안 2번).
+ *  줄에 끝 시간(e)이 있으면 그때 다 차고, 끝난 뒤에는 다음 줄을 가운데에 미리 띄워 늘어지지 않게 한다 */
+const JOIN_GAP = 2;
 export function LyricsView({ lines, pos, state }: { lines: LyricLine[]; pos: number; state?: string }) {
   if (!lines.length) {
     const msg = state === "searching" || state === "off" ? "가사를 찾는 중이에요" : state === "generating" ? "가사를 만드는 중이에요" : "가사가 없어요";
-    return <div className="lyrics-view empty">{msg}</div>;
+    return <div className="lyrics-view empty"><p className="lyr-next">{msg}</p></div>;
   }
   let i = -1;
   while (i + 1 < lines.length && lines[i + 1].t <= pos) i++;
   const cur = lines[i];
-  const next = lines[i + 1];
-  // 다음 줄 시작까지의 90% 동안 부른다고 보고 색을 채운다
-  const span = next ? (next.t - (cur?.t ?? 0)) * 0.9 : 4;
-  const fill = cur ? Math.min(1, (pos - cur.t) / Math.max(span, 0.5)) : 0;
+  // 다음 줄까지 2초 안이면 끝을 다음 줄 시작까지 늘려 색이 이어서 차오르게 한다 (짧은 틈마다 줄이 바뀌면 깜박인다)
+  const nextT = lines[i + 1]?.t ?? Infinity;
+  const end = cur?.e !== undefined && nextT - cur.e < JOIN_GAP ? nextT : cur?.e;
+  const ended = end !== undefined && pos >= end;
+  // 끝난 줄은 위로 올리고, 다음 줄을 아직 부르지 않은 채로 가운데에
+  const mi = ended || !cur ? i + 1 : i;
+  const [prev, main, after] = [lines[mi - 1], lines[mi], lines[mi + 1]];
+  const span = cur && !ended ? (end ?? cur.t + Math.max(((lines[i + 1]?.t ?? cur.t + 4) - cur.t) * 0.9, 0.5)) - cur.t : 1;
+  const fill = cur && !ended ? Math.min(1, (pos - cur.t) / Math.max(span, 0.3)) : 0;
   return (
     <div className="lyrics-view" aria-live="polite">
-      <p className="lyr-prev">{lines[i - 1]?.text ?? ""}</p>
+      <p className="lyr-prev">{prev?.text ?? ""}</p>
       <p className="lyr-cur">
-        {cur ? (
-          <span className="sung" style={{ backgroundSize: `${fill * 100}% 100%` }}>{cur.text}</span>
-        ) : (
-          <span className="muted">♪</span>
-        )}
+        {/* key: 줄이 바뀌면 새로 그려서 파란색이 100%→0%로 되감기며 보이지 않게 */}
+        {main ? <span key={mi} className="sung" style={{ backgroundSize: `${fill * 100}% 100%, 100% 100%` }}>{main.text}</span> : <span className="muted">♪</span>}
       </p>
-      <p className="lyr-next">{(cur ? next : lines[0])?.text ?? ""}</p>
+      <p className="lyr-next">{after?.text ?? ""}</p>
     </div>
   );
 }
@@ -54,6 +60,7 @@ export function keyLabel(key: number, preset: Preset, gender?: Gender): string {
   return name ? (sym ? `${name} ${sym}` : name) : sym || "원키";
 }
 
+const GENDER_LABEL: Record<string, string> = { male: "원곡 남자 가수", female: "원곡 여자 가수", mixed: "혼성" };
 const QUIET_KEYS = ["ArrowUp", "ArrowDown", "+", "-", "0", "j", "J"];
 const typingIn = (e: KeyboardEvent) => !!(e.target as HTMLElement).closest?.("input, textarea, select, [role=dialog]");
 
@@ -64,10 +71,11 @@ const typingIn = (e: KeyboardEvent) => !!(e.target as HTMLElement).closest?.("in
 // shortcut: 키 엔진(Signalsmith 기본 설정) 지연을 2026-11-20 앱에서 잰 값(키와 상관없이 0.12초). 엔진 설정을 바꾸면 다시 잰다
 const ENGINE_LATENCY = 0.12;
 
-export default function Player({ song, settings, onSettings, lyricsRev, hasNext, onEnded, onError, onChanged, tv }: {
-  song: Song; settings: Settings; onSettings: (s: Settings) => void; lyricsRev: number; hasNext: boolean; onEnded: () => void;
+export default function Player({ song, settings, onSettings, lyricsRev, next, onEnded, onCancel, onError, onChanged, tv, onStage }: {
+  song: Song; settings: Settings; onSettings: (s: Settings) => void; lyricsRev: number; next: Song | null;
+  onEnded: () => void; onCancel: () => void;
   tv: { canShow: boolean; open: boolean; show: () => void; close: () => void };
-  onError: (msg: string) => void; onChanged: () => void;
+  onError: (msg: string) => void; onChanged: () => void; onStage: (open: boolean) => void;
 }) {
   const separated = !!song.stems;
   const hasChorus = !!song.stems?.chorus;
@@ -94,12 +102,11 @@ export default function Player({ song, settings, onSettings, lyricsRev, hasNext,
   const [lyricsOn, setLyricsOn] = useState(p.lyrics ?? song.app_lyrics !== false);
   const [stageOpen, setStageOpen] = useState(true);
   const [bgOpen, setBgOpen] = useState(false);
-  const [verseOnly, setVerseOnly] = useState(false); // 1절만 (기획서 F15)
+  const [mixOpen, setMixOpen] = useState(false); // 소리 섞기 패널 (시안 3번)
   const fading = useRef(false);
   // 버튼 줄 자동 숨김 (기획서 F6)
   const [idle, setIdle] = useState(false);
   const [hover, setHover] = useState(false);
-  const [moreOpen, setMoreOpen] = useState(false);
   const [toast, setToast] = useState("");
   const fromKeyboard = useRef(false);
   const [bgUrlText, setBgUrlText] = useState(p.bg_kind === "youtube" ? `https://youtu.be/${p.bg_value}` : "");
@@ -114,6 +121,12 @@ export default function Player({ song, settings, onSettings, lyricsRev, hasNext,
   const gains = useRef<Partial<Record<Part, GainNode>>>({});
   const srcs = useRef<AudioBufferSourceNode[]>([]);
   const bus = useRef<GainNode | null>(null);
+  const master = useRef<GainNode | null>(null);
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  useEffect(() => {
+    if (master.current) master.current.gain.value = settings.volume / 100;
+  }, [settings.volume]);
   const stretch = useRef<Awaited<ReturnType<typeof SignalsmithStretch>> | null>(null);
   // 코러스: gain → 고음 깎기 → (그대로 + 울림) → bus. 휘파람 같은 흠과 낮아지는 구간을 가린다
   const chain = useRef<{ input: GainNode; lp: BiquadFilterNode; wet: GainNode } | null>(null);
@@ -226,14 +239,18 @@ export default function Player({ song, settings, onSettings, lyricsRev, hasNext,
     setLoading(true);
     bus.current = c.createGain();
     makeChorusChain(c, bus.current);
+    const out = c.createGain(); // 프로그램 소리 (설정의 volume)
+    out.gain.value = settingsRef.current.volume / 100;
+    out.connect(c.destination);
+    master.current = out;
     const engine = SignalsmithStretch(c)
       .then(async (node) => {
-        bus.current!.connect(node).connect(c.destination);
+        bus.current!.connect(node).connect(out);
         await node.start();
         stretch.current = node;
       })
       .catch((e) => {
-        bus.current!.connect(c.destination); // 키·속도 없이라도 부를 수 있게
+        bus.current!.connect(out); // 키·속도 없이라도 부를 수 있게
         onError(`키·속도 조절을 켜지 못했어요: ${e?.message ?? e}`);
       });
     const parts: Part[] = !separated ? ["original"] : hasChorus ? ["instrumental", "vocals", "chorus"] : ["instrumental", "vocals"];
@@ -371,9 +388,9 @@ export default function Player({ song, settings, onSettings, lyricsRev, hasNext,
     seek(toSongTime(jumpTo));
     showToast("간주 점프");
   }
-  useEffect(() => {
-    if (!verseOnly || verseAt === null || !playing || fading.current || lyricPos < verseAt) return;
-    // 1절 끝: 3초 동안 소리를 줄이며 끝내고 다음 곡으로
+  // 1절만 부르고 끝내기 (간주 화면 버튼): 3초 동안 소리를 줄이며 끝내고 다음 곡으로
+  function endNow() {
+    if (fading.current || !bus.current || !ctx.current) return;
     fading.current = true;
     const g = bus.current!.gain;
     const t = ctx.current!.currentTime;
@@ -384,7 +401,7 @@ export default function Player({ song, settings, onSettings, lyricsRev, hasNext,
       setPlaying(false);
       endedRef.current();
     }, 3000);
-  }, [lyricPos, verseOnly, verseAt, playing]);
+  }
 
   function showToast(text: string) {
     setToast(text);
@@ -417,161 +434,184 @@ export default function Player({ song, settings, onSettings, lyricsRev, hasNext,
       clearTimeout(t);
       evs.forEach((e) => window.removeEventListener(e, poke));
     };
-  }, [playing, bgOpen, askGender, editing, hover, moreOpen, stageOpen]);
+  }, [playing, bgOpen, askGender, editing, hover, mixOpen, stageOpen]);
   // TV 화면 (기획서 F14): TV에 띄우는 동안 PC 창은 조작 화면만 두고, 재생 상태를 TV 창으로 보낸다
   useEffect(() => setStageOpen(!tv.open), [tv.open]);
   useEffect(() => {
+    onStage(stageOpen || tv.open);
+    return () => onStage(false);
+  }, [stageOpen, tv.open]);
+  useEffect(() => {
     if (!tv.open) return;
-    sendTv({ song, settings, lines: lyrics, heardPos: heard, lyricPos, tempo, playing, lyricsOn, keyLabel: keyLabel(key, preset, gender) });
+    sendTv({ song, settings, lines: lyrics, heardPos: heard, lyricPos, tempo, playing, lyricsOn, keyLabel: keyLabel(key, preset, gender),
+      pos, duration, next: next ? `${next.title} · ${next.artist || "가수 모름"}` : null });
   }, [tv.open, pos, playing, tempo, lyricsOn, lyrics, key, preset, song, settings]);
-  const hideUi = idle && settings.auto_hide && playing && stageOpen && !bgOpen && !askGender && !editing && !hover && !moreOpen;
+  const hideUi = idle && settings.auto_hide && playing && stageOpen && !bgOpen && !askGender && !editing && !hover && !mixOpen;
   const barHover = { onMouseEnter: () => setHover(true), onMouseLeave: () => setHover(false) };
 
-  return (
-    <div className={`player-wrap${stageOpen ? " full" : ""}${hideUi ? " idle" : ""}`}>
-    {stageOpen && (
-      <Stage song={song} settings={settings} heardPos={heard} tempo={tempo} playing={playing} lyricsOn={lyricsOn}
-        topProps={barHover}
-        top={
+  const karaokeVideo = !!song.video && !lyricsOn;
+  const bgLabel = karaokeVideo ? "노래방 영상"
+    : bgKind === "youtube" ? "배경: 유튜브 (소리 끔)" : bgKind === "file" ? "배경: 내 사진·영상" : bgKind === "default" ? "배경: 기본"
+    : settings.bg_mode === "mv" ? "배경: 유튜브 뮤비 (소리 끔)" : settings.bg_mode === "custom" ? "배경: 내 배경화면" : "배경: 기본";
+  const lyricsSource: Record<string, string> = { internet: "인터넷", auto: "자동 생성", file: "가사 파일", manual: "직접 입력", review: "인터넷 (확인 전)" };
+  const info = [song.artist || "가수 모름", gender && GENDER_LABEL[gender], lyricsOn && lyricsSource[song.lyrics?.state ?? ""] && `가사: ${lyricsSource[song.lyrics?.state ?? ""]}`]
+    .filter(Boolean).join(" · ");
+  const gaps = useLyrics ? interludes(lyrics) : [];
+  const nextLine = jumpTo !== null ? lyrics.find((l) => l.t > lyricPos) : undefined;
+  const gapNow = jumpTo !== null ? gaps.find(([a, b]) => lyricPos >= a && lyricPos < b) : undefined;
+  const pct = (t: number) => `${Math.min(100, (toSongTime(t) / duration) * 100)}%`;
+
+  // 위: 곡 목록으로 · 제목 · 배경 표시 · 가사 켜기 · 가사 고치기 · 소리 섞기 · 배경 바꾸기 (시안 2번)
+  const top = (
+    <>
+      <div className="st-left">
+        <button className="st-btn square" onClick={() => setStageOpen(false)} aria-label="곡 목록으로"><BackIcon /></button>
+        <div className="st-title">
+          <div className="st-name">{song.title}</div>
+          <div className="st-info">{info}</div>
+        </div>
+      </div>
+      <div className="st-right">
+        {toast && hideUi ? (
+          <div className="st-toast" role="status"><div className="muted small">단축키로 바꿈</div><b>{toast}</b></div>
+        ) : (
           <>
-            <button onClick={() => setStageOpen(false)} aria-label="곡 목록으로">← 곡 목록</button>
-            <b className="stage-title">{song.title} <span className="muted">{song.artist}</span></b>
-            <button onClick={toggleLyrics} aria-pressed={lyricsOn} className={lyricsOn ? "on" : ""}
-              title={song.video ? "가사를 끄면 노래방 영상이 화면 전체에 나와요" : ""}>가사 {lyricsOn ? "켬" : "끔"}</button>
-            {lyricsOn && <button onClick={openEditor} disabled={loading} title="단축키 E">가사 고치기</button>}
-            <button onClick={() => setVerseOnly((v) => !v)} aria-pressed={verseOnly} className={verseOnly ? "on" : ""} disabled={verseAt === null}
-              title={verseAt === null ? "가사가 없거나 꺼져 있으면 1절 끝을 알 수 없어요" : `1절 끝(${fmt(verseAt)})에서 줄이며 끝내요`}>1절만</button>
-            {!(song.video && !lyricsOn) && <button onClick={() => setBgOpen((o) => !o)} aria-expanded={bgOpen}>배경 바꾸기</button>}
-            {bgOpen && (
-              <div className="bg-pop" role="group" aria-label="이 곡의 배경">
-                {([["auto", "설정 따르기"], ["default", "기본 배경화면"]] as const).map(([k, label]) => (
-                  <button key={k} className={bgKind === k ? "on" : ""} onClick={() => setBg(k)}>{label}</button>
-                ))}
-                <div className="bg-url">
-                  <input value={bgUrlText} onChange={(e) => setBgUrlText(e.target.value)} placeholder="유튜브 주소 붙여넣기" aria-label="배경 유튜브 주소" />
-                  <button className={bgKind === "youtube" ? "on" : ""} onClick={() => setBg("youtube", bgUrlText)} disabled={!bgUrlText.trim()}>이 영상</button>
-                </div>
-                <button className={bgKind === "file" ? "on" : ""} onClick={pickBgFile}>내 사진·영상 고르기…</button>
-              </div>
-            )}
+            <span className="st-pill"><VideoIcon /> {bgLabel}</span>
+            <button className={`st-btn${lyricsOn ? " on" : ""}`} onClick={toggleLyrics} aria-pressed={lyricsOn}
+              title={song.video ? "가사를 끄면 노래방 영상이 화면 전체에 나와요" : "이 곡에만 기억돼요"}><LinesIcon /> {lyricsOn ? "가사 켜짐" : "가사 꺼짐"}</button>
+            {lyricsOn && <button className="st-btn" onClick={openEditor} disabled={loading} title="가사 고치기 (E)"><PenIcon /> 가사 고치기</button>}
+            <button className={`st-btn${mixOpen ? " on" : ""}`} onClick={() => setMixOpen((o) => !o)} aria-expanded={mixOpen}><SlidersIcon /> 간이 설정</button>
+            {!karaokeVideo && <button className="st-btn square" onClick={() => setBgOpen((o) => !o)} aria-expanded={bgOpen} aria-label="배경 바꾸기"><ImageIcon /></button>}
           </>
-        }>
-        {jumpTo !== null && <button className="jump" onClick={jump} title="단축키 J">간주 점프 ▸▸</button>}
-        {lyricsOn && <LyricsView lines={lyrics} pos={lyricPos} state={song.lyrics?.state} />}
-      </Stage>
-    )}
-    {toast && hideUi && <div className="toast" role="status">{toast}</div>}
-    {editing && (
-      <LyricsEditor song={song} startAt={editing.at}
-        onClose={(saved) => {
-          if (saved) setRev((r) => r + 1);
-          if (editing.resume) start(offset.current);
-          setEditing(null);
-        }} />
-    )}
-    <footer className="player" {...barHover}>
-      <div className="ctl-group" role="group" aria-label="키 조절">
-        <div className="stepper">
-          <button onClick={() => changeKey(-1)} disabled={key <= -6} aria-label="키 내림" title="↓ 또는 -">−</button>
-          <b className="stepper-val" aria-live="polite">{keyLabel(key, preset, gender)}</b>
-          <button onClick={() => changeKey(1)} disabled={key >= 6} aria-label="키 올림" title="↑ 또는 +">+</button>
-        </div>
-        <div className="presets">
-          {(["orig", "male", "female"] as const).map((pr) => (
-            <button key={pr} onClick={() => choosePreset(pr)} title={pr === "orig" ? "단축키 0" : ""}
-              className={preset === pr && (pr !== "orig" || key === 0) ? "on" : ""}>
-              {pr === "orig" ? "원키" : pr === "male" ? "남자키" : "여자키"}
-            </button>
-          ))}
-        </div>
-        {askGender && (
-          <div className="ask-gender" role="group" aria-label="원곡 가수 성별">
-            <span>원곡 가수는요?</span>
-            <button onClick={() => answerGender("male")}>남자</button>
-            <button onClick={() => answerGender("female")}>여자</button>
-            <button onClick={() => answerGender("mixed")}>혼성</button>
-            <button className="muted" onClick={() => setAskGender(null)} aria-label="취소">✕</button>
+        )}
+        {bgOpen && (
+          <div className="bg-pop" role="group" aria-label="이 곡의 배경">
+            {([["auto", "설정 따르기"], ["default", "기본 배경화면"]] as const).map(([k, label]) => (
+              <button key={k} className={bgKind === k ? "on" : ""} onClick={() => setBg(k)}>{label}</button>
+            ))}
+            <div className="bg-url">
+              <input value={bgUrlText} onChange={(e) => setBgUrlText(e.target.value)} placeholder="유튜브 주소 붙여넣기" aria-label="배경 유튜브 주소" />
+              <button className={bgKind === "youtube" ? "on" : ""} onClick={() => setBg("youtube", bgUrlText)} disabled={!bgUrlText.trim()}>이 영상</button>
+            </div>
+            <button className={bgKind === "file" ? "on" : ""} onClick={pickBgFile}>내 사진·영상 고르기…</button>
           </div>
         )}
       </div>
-      <button className="next" onClick={() => seek(0)} disabled={loading} aria-label="처음부터" title="처음부터 (Home)">⏮</button>
-      <button className="play" onClick={() => (playing ? pause() : start(offset.current))} disabled={loading}
-        aria-label={playing ? "일시정지" : "재생"}>
-        {playing ? "❚❚" : "▶"}
-      </button>
-      {!stageOpen && !tv.open && <button className="next" onClick={() => setStageOpen(true)} title="노래방 화면 보기">노래방 화면</button>}
-      {tv.open ? <button className="next" onClick={tv.close}>TV 끄기</button>
-        : tv.canShow && <button className="next" onClick={tv.show} title="두 번째 모니터에 노래방 화면 띄우기">TV에 띄우기</button>}
-      {hasNext && <button className="next" onClick={onEnded} aria-label="다음 곡" title="다음 예약곡으로">⏭</button>}
-      <div className="now">
-        <b>{song.title}</b> <span className="muted">{song.artist}</span>
-        <div className="seek">
-          <span>{fmt(pos)}</span>
-          <input type="range" min={0} max={duration} step={0.1} value={pos} aria-label="재생 위치"
-            onChange={(e) => seek(Number(e.target.value))} disabled={loading} />
-          <span>{fmt(duration)}</span>
-        </div>
+    </>
+  );
+
+  // 가운데: 가사, 간주 중이면 남은 시간과 간주 점프 (시안 7번), 가사를 껐으면 안내
+  const middle = !lyricsOn ? (
+    !karaokeVideo && <div className="lyrics-off"><span>앱 가사 꺼짐 · 이 곡에만 기억돼요</span></div>
+  ) : jumpTo !== null && gapNow ? (
+    <div className="interlude">
+      <div className="il-label">간주 중</div>
+      <div className="il-count">{fmt(gapNow[1] - lyricPos)}</div>
+      <div className="il-bar"><span style={{ width: `${((lyricPos - gapNow[0]) / (gapNow[1] - gapNow[0])) * 100}%` }} /></div>
+      <div className="il-btns">
+        <button className="il-jump" onClick={jump}><JumpIcon /> 간주 점프 <small>(J)</small></button>
+        <button className="il-end" onClick={endNow} disabled={fading.current}>1절만 부르고 끝내기</button>
       </div>
-      {separated && (
-        <>
-          <div className="toggle" role="group" aria-label="원곡 또는 반주">
-            <button aria-pressed={track === "orig"} className={track === "orig" ? "on" : ""} onClick={() => setTrack("orig")}>원곡</button>
-            <button aria-pressed={track === "inst"} className={track === "inst" ? "on" : ""} onClick={() => setTrack("inst")}>반주</button>
-          </div>
-          <label className="guide">
-            가이드 보컬 <b>{guide}%</b>
-            <input type="range" min={0} max={100} step={5} value={guide} disabled={track === "orig"}
-              onChange={(e) => setGuide(Number(e.target.value))} />
-          </label>
-          {hasChorus && (
-            <>
-              <label className="guide">
-                코러스 <b>{chorus}%</b>
-                <input type="range" min={0} max={150} step={10} value={chorus} disabled={track === "orig"}
-                  onChange={(e) => setChorus(Number(e.target.value))} />
-              </label>
-              <details className="more" onToggle={(e) => setMoreOpen(e.currentTarget.open)}>
-                <summary>코러스 다듬기</summary>
-                <label>
-                  고음 깎기
-                  <select value={lowpass} onChange={(e) => setLowpass(Number(e.target.value))}>
-                    {[0, 12000, 9000, 7000, 5000, 3500].map((f) => (
-                      <option key={f} value={f}>{f ? `${f / 1000}kHz 위` : "끔"}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  울림 <b>{verb}%</b>
-                  <input type="range" min={0} max={100} step={10} value={verb} onChange={(e) => setVerb(Number(e.target.value))} />
-                </label>
-              </details>
-            </>
+      {nextLine && <><div className="il-next-label">다음 가사</div><p className="il-next">{nextLine.text}</p></>}
+    </div>
+  ) : (
+    <LyricsView lines={lyrics} pos={lyricPos} state={song.lyrics?.state} />
+  );
+
+  // 아래: 진행 바 (노란 구간 = 간주, 노란 선 = 1절 끝) + 버튼 줄
+  const bottom = (
+    <div className="pl-bottom" {...barHover}>
+      <div className="pl-progress">
+        {!stageOpen && <b className="pl-now">{song.title} <span className="muted">{song.artist}</span></b>}
+        <span>{fmt(pos)}</span>
+        <div className="pl-track">
+          <div className="pl-fill" style={{ width: `${(pos / duration) * 100}%` }} />
+          {gaps.map(([a, b]) => <div key={a} className="pl-gap" style={{ left: pct(a), width: `calc(${pct(b)} - ${pct(a)})` }} title="간주" />)}
+          {verseAt !== null && <div className="pl-verse" style={{ left: pct(verseAt) }} title="1절 끝(추정)" />}
+          <input type="range" min={0} max={duration} step={0.1} value={pos} aria-label="재생 위치" onChange={(e) => seek(Number(e.target.value))} disabled={loading} />
+        </div>
+        <span>{fmt(duration)}</span>
+      </div>
+      <footer className="pl-bar">
+        <div className="pl-group" role="group" aria-label="키 조절">
+          <button className="pl-step" onClick={() => changeKey(-1)} disabled={key <= -6} aria-label="키 내림" title="↓ 또는 -">−</button>
+          <div className="pl-val"><span>키</span><b className="accent" aria-live="polite">{keyLabel(key, preset, gender)}</b></div>
+          <button className="pl-step" onClick={() => changeKey(1)} disabled={key >= 6} aria-label="키 올림" title="↑ 또는 +">+</button>
+          <span className="pl-sep" aria-hidden />
+          {(["orig", "male", "female"] as const).map((pr) => (
+            <button key={pr} className={`pl-preset${preset === pr && (pr !== "orig" || key === 0) ? " on" : ""}`} onClick={() => choosePreset(pr)} title={pr === "orig" ? "단축키 0" : ""}>
+              {pr === "orig" ? "원키" : pr === "male" ? "남자키" : "여자키"}
+            </button>
+          ))}
+          {askGender && (
+            <div className="ask-gender" role="group" aria-label="원곡 가수 성별">
+              <span>원곡 가수는요?</span>
+              <button onClick={() => answerGender("male")}>남자</button>
+              <button onClick={() => answerGender("female")}>여자</button>
+              <button onClick={() => answerGender("mixed")}>혼성</button>
+              <button className="muted" onClick={() => setAskGender(null)} aria-label="취소">✕</button>
+            </div>
           )}
-        </>
-      )}
-      {settings.mic_on && (
-        <details className="more" onToggle={(e) => setMoreOpen(e.currentTarget.open)}>
-          <summary>마이크</summary>
-          <label>음량 <b>{settings.mic_volume}%</b>
-            <input type="range" min={0} max={150} step={5} value={settings.mic_volume} onChange={(e) => onSettings({ ...settings, mic_volume: Number(e.target.value) })} />
-          </label>
-          <label>에코 <b>{settings.mic_echo}%</b>
-            <input type="range" min={0} max={100} step={5} value={settings.mic_echo} onChange={(e) => onSettings({ ...settings, mic_echo: Number(e.target.value) })} />
-          </label>
-        </details>
-      )}
-      {loading && <span className="muted">불러오는 중…</span>}
-      <div className="ctl-group" role="group" aria-label="속도 조절">
-        <div className="stepper">
-          <button onClick={() => setTempo((t) => Math.max(0.7, Math.round((t - 0.05) * 100) / 100))} disabled={tempo <= 0.7} aria-label="속도 내림">−</button>
-          <b className="stepper-val">{tempo === 1 ? "원래 속도" : `${tempo.toFixed(2)}배`}</b>
-          <button onClick={() => setTempo((t) => Math.min(1.3, Math.round((t + 0.05) * 100) / 100))} disabled={tempo >= 1.3} aria-label="속도 올림">+</button>
         </div>
-        <div className="presets">
-          <button onClick={() => setTempo(1)} className={tempo === 1 ? "on" : ""}>원래 속도</button>
+
+        <div className="pl-center">
+          <div className="pl-transport">
+            <button className="pl-round" onClick={() => seek(0)} disabled={loading} aria-label="처음부터" title="처음부터 (Home)"><RestartIcon /></button>
+            <button className="pl-play" onClick={() => (playing ? pause() : start(offset.current))} disabled={loading} aria-label={playing ? "일시정지" : "재생"}>
+              {playing ? <PauseIcon /> : <PlayIcon size={22} />}
+            </button>
+            <button className="pl-round" onClick={onEnded} disabled={!next} aria-label="다음 곡으로 건너뛰기" title="다음 예약곡으로"><SkipIcon /></button>
+            <button className="pl-round" onClick={onCancel} aria-label="곡 취소" title="곡 취소 (멈추고 목록으로, 예약은 그대로)"><StopIcon /></button>
+          </div>
+          {separated && (
+            <div className="toggle" role="group" aria-label="원곡 또는 반주">
+              <button aria-pressed={track === "orig"} className={track === "orig" ? "on" : ""} onClick={() => setTrack("orig")}>원곡</button>
+              <button aria-pressed={track === "inst"} className={track === "inst" ? "on" : ""} onClick={() => setTrack("inst")}>반주</button>
+            </div>
+          )}
+          <div className="pl-next">
+            <div className="muted">다음 곡</div>
+            <b>{next ? `${next.title} · ${next.artist || "가수 모름"}` : "예약 없음"}</b>
+          </div>
+          {!stageOpen && !tv.open && <button className="pl-round wide" onClick={() => setStageOpen(true)}>노래방 화면</button>}
+          {loading && <span className="muted">불러오는 중…</span>}
         </div>
-      </div>
-    </footer>
+
+        <div className="pl-group" role="group" aria-label="속도 조절">
+          <button className="pl-step" onClick={() => setTempo((t) => Math.max(0.7, Math.round((t - 0.05) * 100) / 100))} disabled={tempo <= 0.7} aria-label="느리게">−</button>
+          <div className="pl-val"><span>속도</span><b>{tempo.toFixed(2)}배</b></div>
+          <button className="pl-step" onClick={() => setTempo((t) => Math.min(1.3, Math.round((t + 0.05) * 100) / 100))} disabled={tempo >= 1.3} aria-label="빠르게">+</button>
+        </div>
+      </footer>
+    </div>
+  );
+
+  return (
+    <div className={`player-wrap${stageOpen ? " full" : ""}${hideUi ? " idle" : ""}`}>
+      {stageOpen ? (
+        <Stage song={song} settings={settings} heardPos={heard} tempo={tempo} playing={playing} lyricsOn={lyricsOn}
+          topProps={barHover} top={top} bottom={bottom}>
+          {middle}
+        </Stage>
+      ) : bottom}
+      {mixOpen && (
+        <MixPanel mode={song.mode} separated={separated} hasChorus={hasChorus} mix={{ guide, chorus, lowpass, verb }}
+          onMix={(m) => {
+            if (m.guide !== undefined) setGuide(m.guide);
+            if (m.chorus !== undefined) setChorus(m.chorus);
+            if (m.lowpass !== undefined) setLowpass(m.lowpass);
+            if (m.verb !== undefined) setVerb(m.verb);
+          }}
+          settings={settings} onSettings={onSettings} onClose={() => setMixOpen(false)} />
+      )}
+      {editing && (
+        <LyricsEditor song={song} startAt={editing.at}
+          onClose={(saved) => {
+            if (saved) setRev((r) => r + 1);
+            if (editing.resume) start(offset.current);
+            setEditing(null);
+          }} />
+      )}
     </div>
   );
 }

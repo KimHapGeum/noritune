@@ -10,6 +10,7 @@ import { LyricsView } from "./Player";
 export type TvState = {
   song: Song; settings: Settings; lines: LyricLine[];
   heardPos: number; lyricPos: number; tempo: number; playing: boolean; lyricsOn: boolean; keyLabel: string;
+  pos: number; duration: number; next: string | null;
 } | null;
 
 export const TV_LABEL = "tv";
@@ -84,7 +85,14 @@ export function TvView() {
   return (
     <div className="player-wrap full tv">
       <Stage song={s.song} settings={s.settings} heardPos={s.heardPos} tempo={s.tempo} playing={s.playing} lyricsOn={s.lyricsOn}
-        top={<><b className="stage-title">{s.song.title} <span className="muted">{s.song.artist}</span></b><b className="tv-key">{s.keyLabel}</b></>}>
+        top={<><div className="st-title"><div className="st-name">{s.song.title}</div><div className="st-info">{s.song.artist}</div></div>
+          <div className="tv-key"><span>키</span><b>{s.keyLabel}</b></div></>}
+        bottom={
+          <div className="tv-bottom">
+            <div className="tv-track"><span style={{ width: `${(s.pos / Math.max(s.duration, 1)) * 100}%` }} /></div>
+            {s.next && <div className="tv-next"><span className="muted">다음 곡</span> <b>{s.next}</b></div>}
+          </div>
+        }>
         {s.lyricsOn && <LyricsView lines={s.lines} pos={s.lyricPos} state={s.song.lyrics?.state} />}
       </Stage>
     </div>

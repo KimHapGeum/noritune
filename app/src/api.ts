@@ -37,6 +37,9 @@ export type Prefs = {
 let base: Promise<string> | null = null;
 /** 처리기 주소. 포트는 Rust가 처리기를 켤 때 받아 둔다. */
 const engineUrl = () => (base ??= invoke<number>("engine_port").then((p) => `http://127.0.0.1:${p}`));
+/** 처리기를 다시 켜면 포트가 바뀌므로 다음 요청 때 새로 묻는다 */
+export const resetEngine = () => void (base = null);
+export const restartEngine = () => invoke<number>("restart_engine").then(resetEngine);
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch((await engineUrl()) + path, init);
@@ -47,11 +50,16 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const listSongs = () => call<{ songs: Song[] }>("/songs").then((r) => r.songs);
 
-export const addSong = (path: string, mode: Mode) =>
-  call<Song>("/songs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, mode }) });
+/** lyrics_pick: 곡 추가 화면에서 고른 가사 후보 번호, -1이면 곡이 준비되면 자동 생성 */
+export type AddExtra = { title?: string; artist?: string; gender?: Gender; lyrics_pick?: number };
+export const addSong = (path: string, mode: Mode, extra: AddExtra = {}) =>
+  call<Song>("/songs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, mode, ...extra }) });
+export const probeFile = (path: string) => call<{ title: string; artist: string; duration: number }>(`/probe?path=${encodeURIComponent(path)}`);
+export const previewLyrics = (title: string, artist: string, duration: number) =>
+  call<{ candidates: LyricsCandidate[] }>(`/lyrics/search?title=${encodeURIComponent(title)}&artist=${encodeURIComponent(artist)}&duration=${duration}`).then((r) => r.candidates);
 
 export type LyricsState = "searching" | "review" | "internet" | "generating" | "auto" | "file" | "none" | "off" | "manual";
-export type LyricLine = { t: number; text: string };
+export type LyricLine = { t: number; text: string; e?: number }; // e: 줄이 끝나는 때 (없으면 다음 줄까지)
 export type LyricsCandidate = {
   id: number; title: string; artist: string; album: string; duration: number; diff: number | null;
   synced: boolean; lines: LyricLine[]; plain: string; recommended: boolean;
@@ -83,7 +91,7 @@ export const searchYoutube = (q: string, karaokeOnly: boolean) =>
 
 export const addYoutube = (body: {
   id: string; video_title: string; title: string; artist: string; duration: number; mode: Mode;
-  lyrics_in_video?: "yes" | "no" | "unknown";
+  lyrics_in_video?: "yes" | "no" | "unknown"; gender?: Gender; lyrics_pick?: number;
 }) => call<Song>("/songs/youtube", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 /** 곡마다 기억하는 키·속도·소리 섞기, 원곡 가수 성별 */
@@ -96,11 +104,13 @@ export type Settings = {
   bg_mode: "default" | "mv" | "custom"; bg_mv_fallback: "default" | "custom";
   bg_files: string[]; bg_interval: 10 | 30 | 0; bg_dim: number;
   auto_hide: boolean;
+  volume: number;
   mic_on: boolean; mic_device: string; mic_volume: number; mic_echo: number;
   onboarded: boolean; ytdlp_checked: number;
+  default_mode: Mode; ytdlp_auto: boolean;
 };
 export const DEFAULT_SETTINGS: Settings = { lyrics_delay: 0, bg_mode: "mv", bg_mv_fallback: "default", bg_files: [], bg_interval: 10, bg_dim: 55, auto_hide: true,
-  mic_on: false, mic_device: "", mic_volume: 80, mic_echo: 30, onboarded: true, ytdlp_checked: 0 };
+  volume: 100, mic_on: false, mic_device: "", mic_volume: 80, mic_echo: 30, onboarded: true, ytdlp_checked: 0, default_mode: "빠른 분리", ytdlp_auto: true };
 /** 공식 뮤비 후보 (좋은 순). badMv: 틀 수 없던 것을 뺀다 */
 export const findMv = (id: string) => call<{ ids: string[] }>(`/songs/${id}/mv`).then((r) => r.ids);
 export const badMv = (id: string, vid: string) => post<{ ids: string[] }>(`/songs/${id}/mv/bad`, { queue: [vid] });
@@ -120,10 +130,12 @@ export const markPlayed = (id: string) => post<Song>(`/songs/${id}/played`);
 export const deleteSong = (id: string) => call<{ ok: boolean }>(`/songs/${id}`, { method: "DELETE" });
 export const remakeSong = (id: string, mode: Mode) => post<Song>(`/songs/${id}/remake`, { mode });
 export const getSystem = (withGpu = false) =>
-  call<{ data_dir: string; free: number; synced: boolean; gpu?: string | null }>(`/system${withGpu ? "?with_gpu=true" : ""}`);
-export type StorageSong = { id: string; title: string; artist: string; bytes: number; stems: boolean; last_played?: string };
-export const getStorage = () => call<{ total: number; songs: StorageSong[] }>("/storage");
+  call<{ data_dir: string; free: number; synced: boolean; gpu?: string | null; models: { quick: boolean; hq: boolean } }>(`/system${withGpu ? "?with_gpu=true" : ""}`);
+export type StorageSong = { id: string; title: string; artist: string; bytes: number; stems_bytes: number; stems: boolean; last_played?: string };
+export type Storage = { total: number; kinds: { original: number; stems: number; video: number }; songs: StorageSong[] };
+export const getStorage = () => call<Storage>("/storage");
 export const trimStorage = (days: number) => post<{ songs: number; freed: number }>("/storage/trim", { days });
+export const moveStorage = (path: string) => post<{ data_dir: string; restart: boolean }>("/storage/move", { path });
 export const updateYtdlp = () => post<{ message: string }>("/ytdlp/update");
 export const openLogs = () => post<{ path: string }>("/logs/open");
 

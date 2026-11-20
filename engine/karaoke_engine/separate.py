@@ -34,7 +34,7 @@ def work_dir() -> Path:
 
 
 def _ffmpeg() -> str:
-    # shortcut: 개발 PC의 PATH에 있는 ffmpeg을 쓴다. 설치 파일을 만들 때 ffmpeg을 함께 넣는다
+    # 설치판은 앱이 PATH 앞에 넣어 준 설치 폴더의 bin\ffmpeg.exe (LGPL 빌드), 개발 PC는 PATH의 것
     exe = shutil.which("ffmpeg")
     if not exe:
         raise RuntimeError("ffmpeg을 찾을 수 없어요")
@@ -57,6 +57,12 @@ def use_cpu() -> None:
         torch.cuda.empty_cache()
     except Exception:
         pass
+
+
+def models_status() -> dict:
+    """분리 모델을 받아 두었는지 (설정 → 업데이트)"""
+    have = lambda name: (model_dir() / name).exists()  # noqa: E731
+    return {"quick": have(QUICK), "hq": have(HQ_INST) and have(HQ_VOCALS) and have(QUICK)}
 
 
 def gpu_name() -> str | None:

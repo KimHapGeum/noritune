@@ -1,6 +1,6 @@
 // 실행: node app/src/verse.test.ts  (Node 24는 TypeScript 타입을 지우고 바로 돌린다)
 import assert from "node:assert/strict";
-import { interludeTarget, verseEnd } from "./verse.ts";
+import { interludes, interludeTarget, verseEnd } from "./verse.ts";
 
 const L = (...ts: number[]) => ts.map((t) => ({ t, text: `${t}` }));
 const lines = L(15, 19, 23, 27, 60, 64, 68, 72, 105, 109);
@@ -21,4 +21,10 @@ const fill = (...pairs: [number, number][]) =>
   pairs.flatMap(([a, b]) => [...Array.from({ length: Math.ceil((b - a) / 4) }, (_, k) => a + 4 * k), b]);
 const uju = L(...fill([9.4, 9.4], [21.1, 45.0], [53.2, 70.7], [79.7, 203.6]));
 assert.equal(verseEnd(uju, 215), 74.7);
+// 끝 시간이 있으면 줄이 끝나는 순간부터 간주 (4초 어림 대신)
+const withEnd = [{ t: 10, text: "a", e: 11 }, { t: 25, text: "b", e: 28 }, { t: 30, text: "c" }];
+assert.deepEqual(interludes(withEnd), [[0, 10], [11, 25]]);
+assert.equal(interludeTarget(withEnd, 11.5), 23); // 11초에 끝났으니 바로 간주 점프
+assert.equal(interludeTarget(withEnd, 10.5), null); // 아직 부르는 중
+assert.equal(verseEnd(withEnd, 40), 11);
 console.log("verse.ts 시험 통과");

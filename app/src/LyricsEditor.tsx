@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { audioUrl, getLyrics, saveLyrics, type Song } from "./api";
+import { XIcon } from "./icons";
 
-type Row = { key: number; t: number; text: string };
+type Row = { key: number; t: number; text: string; e?: number }; // e: 줄이 끝나는 때
 
 const fmtT = (s: number) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${(s % 60).toFixed(2).padStart(5, "0")}`;
 const fmt = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
@@ -60,12 +61,27 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
     setDirty(true);
   }
 
-  function tap() {
-    if (!rows || tapIdx >= rows.length) return;
-    const t = Math.round((audio.current?.currentTime ?? 0) * 100) / 100;
-    edit((rs) => rs.map((r, i) => (i === tapIdx ? { ...r, t } : r)));
-    setTapIdx(tapIdx + 1);
-    rowEls.current.get(rows[tapIdx + 1]?.key)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  // 탭 싱크: 누르는 순간 = 줄 시작, 떼는 순간 = 줄 끝 (누르고 있는 동안 그 줄을 부른다).
+  // 짧게 톡 누르면(0.4초 안) 시작만 찍는다. 끝 시간이 없으면 다음 줄까지 늘어지는 문제를 막는다
+  const holding = useRef<{ idx: number; at: number } | null>(null);
+  const [held, setHeld] = useState(false);
+  const nowT = () => Math.round((audio.current?.currentTime ?? 0) * 100) / 100;
+  function tapDown() {
+    if (!rows || tapIdx >= rows.length || holding.current) return;
+    const t = nowT();
+    holding.current = { idx: tapIdx, at: t };
+    setHeld(true);
+    edit((rs) => rs.map((r, i) => (i === tapIdx ? { key: r.key, text: r.text, t } : r)));
+  }
+  function tapUp() {
+    const h = holding.current;
+    if (!h || !rows) return;
+    holding.current = null;
+    setHeld(false);
+    const e = nowT();
+    if (e - h.at >= 0.4) edit((rs) => rs.map((r, i) => (i === h.idx ? { ...r, e } : r)));
+    setTapIdx(h.idx + 1);
+    rowEls.current.get(rows[h.idx + 1]?.key)?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 
   function togglePlay() {
@@ -84,7 +100,8 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
   }
 
   function shiftAll(d: number) {
-    edit((rs) => rs.map((r) => ({ ...r, t: Math.max(0, Math.round((r.t + d) * 100) / 100) })));
+    const move = (x: number) => Math.max(0, Math.round((x + d) * 100) / 100);
+    edit((rs) => rs.map((r) => ({ ...r, t: move(r.t), e: r.e === undefined ? undefined : move(r.e) })));
     setShift((s) => Math.round((s + d) * 10) / 10);
   }
 
@@ -98,7 +115,7 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
     if (!rows) return;
     setBusy(true);
     try {
-      await saveLyrics(song.id, rows.map(({ t, text }) => ({ t, text })));
+      await saveLyrics(song.id, rows.map(({ t, text, e }) => (e !== undefined && e > t ? { t, text, e } : { t, text })));
       audio.current?.pause();
       onClose(true);
     } catch (e) {
@@ -107,19 +124,29 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
     }
   }
 
-  // 스페이스바: 시간 찍기, Esc: 닫기 (글자를 고치는 중에는 그대로 둔다)
-  const keys = useRef({ tap, close });
-  keys.current = { tap, close };
+  // 스페이스바: 누르면 시작, 떼면 끝 / Esc: 닫기 (글자를 고치는 중에는 그대로 둔다)
+  const keys = useRef({ tapDown, tapUp, close });
+  keys.current = { tapDown, tapUp, close };
   useEffect(() => {
-    const on = (e: KeyboardEvent) => {
+    const down = (e: KeyboardEvent) => {
       if (e.key === "Escape") return void keys.current.close();
       if (e.code === "Space" && !typing(e)) {
         e.preventDefault();
-        keys.current.tap();
+        if (!e.repeat) keys.current.tapDown(); // 누르고 있으면 반복 입력이 오는데 무시한다
       }
     };
-    window.addEventListener("keydown", on);
-    return () => window.removeEventListener("keydown", on);
+    const up = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !typing(e)) {
+        e.preventDefault();
+        keys.current.tapUp();
+      }
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
   }, []);
 
   let playingIdx = -1;
@@ -130,18 +157,22 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
     <div className="backdrop">
       <div className="dialog editor" role="dialog" aria-label="가사 편집">
         <div className="dialog-head">
-          <h2>가사 편집 · {song.title} <span className="muted">{song.artist} · {fmt(song.duration)}</span></h2>
+          <div className="ed-titles">
+            <h2>가사 편집 · {song.title}</h2>
+            <div className="muted small">{song.artist || "가수 모름"} · {fmt(song.duration)}</div>
+          </div>
           <span className="head-actions">
             {song.lyrics?.state === "auto" && <span className="kind kind-mr">자동 생성 가사 · 틀린 곳이 있을 수 있어요</span>}
-            {onChooseOther && <button className="text-btn" onClick={onChooseOther}>다른 가사 고르기</button>}
-            <button aria-label="닫기" onClick={close}>✕</button>
+            {onChooseOther && <button className="sp-btn" onClick={onChooseOther}>다른 가사 고르기</button>}
+            <button className="primary" onClick={save} disabled={!rows || busy}>{busy ? "저장하는 중…" : "저장"}</button>
+            <button className="icon-btn boxed" aria-label="닫기" onClick={close}><XIcon /></button>
           </span>
         </div>
         <div className="dialog-body">
           <section className="ed-lines">
             {rows === null ? <p className="muted">불러오는 중…</p> : (
               <>
-                <div className="ed-row ed-headrow muted"><span>시간</span><span>가사</span></div>
+                <div className="ed-row ed-headrow muted"><span>시작</span><span>끝</span><span>가사</span></div>
                 <ol>
                   {rows.map((r, i) => (
                     <li key={r.key} ref={(el) => void (el ? rowEls.current.set(r.key, el) : rowEls.current.delete(r.key))}
@@ -151,6 +182,14 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
                           const t = parseT(e.target.value);
                           if (t === null) e.target.value = fmtT(r.t);
                           else if (t !== r.t) edit((rs) => rs.map((x) => (x.key === r.key ? { ...x, t } : x)));
+                        }} />
+                      <input key={`${r.key}-e-${r.e}`} className="ed-t" defaultValue={r.e === undefined ? "" : fmtT(r.e)} placeholder="—"
+                        aria-label={`${i + 1}번째 줄 끝 시간`} title="비워 두면 다음 줄까지"
+                        onBlur={(e) => {
+                          const v = e.target.value.trim();
+                          const t = v ? parseT(v) : undefined;
+                          if (t === null) e.target.value = r.e === undefined ? "" : fmtT(r.e);
+                          else if (t !== r.e) edit((rs) => rs.map((x) => (x.key === r.key ? { ...x, e: t } : x)));
                         }} />
                       <input className="ed-text" value={r.text} aria-label={`${i + 1}번째 줄 가사`}
                         onChange={(e) => edit((rs) => rs.map((x) => (x.key === r.key ? { ...x, text: e.target.value } : x)))} />
@@ -173,7 +212,7 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
           </section>
           <section className="yt-info ed-side">
             <h3>탭으로 시간 맞추기</h3>
-            <p className="muted small">노래를 틀어 두고, 각 줄이 시작될 때 버튼이나 스페이스바를 누르세요.</p>
+            <p className="muted small">노래를 틀어 두고, 줄을 부르기 시작할 때 스페이스바(또는 아래 버튼)를 누르고 다 부르면 떼세요. 시작과 끝이 같이 찍혀요. 톡 누르면 시작만 찍혀요.</p>
             <div className="seek">
               <button className="ed-play" onClick={togglePlay} aria-label={playing ? "일시정지" : "재생"}>{playing ? "❚❚" : "▶"}</button>
               <span>{fmt(cur)}</span>
@@ -185,7 +224,10 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
               <span className="muted">다음에 찍을 줄</span>
               <b>{rows?.[tapIdx]?.text || (rows && tapIdx >= rows.length ? "마지막 줄까지 찍었어요" : "")}</b>
             </p>
-            <button className="primary" onClick={tap} disabled={!rows || tapIdx >= rows.length}>지금 시간 찍기 (스페이스바)</button>
+            <button className={`primary${held ? " holding" : ""}`} disabled={!rows || tapIdx >= rows.length}
+              onPointerDown={tapDown} onPointerUp={tapUp} onPointerLeave={tapUp}>
+              {held ? "부르는 중… 다 부르면 떼세요" : "누르고 있는 동안 부르기 (스페이스바)"}
+            </button>
 
             <h3>전체 가사 시간 옮기기</h3>
             <p className="muted small">가사가 노래보다 빠르거나 느릴 때</p>
@@ -197,10 +239,6 @@ export default function LyricsEditor({ song, startAt = 0, onClose, onChooseOther
           </section>
         </div>
         {err && <div className="error inline" role="alert">{err}</div>}
-        <div className="dialog-foot">
-          <button onClick={close}>닫기</button>
-          <button className="primary" onClick={save} disabled={!rows || busy}>{busy ? "저장하는 중…" : "저장"}</button>
-        </div>
         <audio ref={audio} preload="auto" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
           onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)} />
       </div>

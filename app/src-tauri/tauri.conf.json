@@ -37,7 +37,10 @@
     ],
     "createUpdaterArtifacts": true,
     "resources": {
-      "C:/Users/osj00/.cache/karaoke/pyinstaller/dist/noritune-engine/": "engine/",
+      "C:/Users/osj00/.cache/karaoke/bin/": "bin/",
+      "../../engine/karaoke_engine/": "engine/karaoke_engine/",
+      "../../engine/pyproject.toml": "engine/pyproject.toml",
+      "../../engine/uv.lock": "engine/uv.lock",
       "../src/licenses/": "licenses/"
     },
     "windows": {
@@ -45,7 +48,8 @@
         "languages": [
           "Korean"
         ],
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "windows/hooks.nsh"
       }
     },
     "shortDescription": "내 노래를 반주로 만들어 부르는 PC 노래방"

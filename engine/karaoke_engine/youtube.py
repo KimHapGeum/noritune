@@ -79,8 +79,8 @@ def video_id(text: str) -> str | None:
 
 
 def yt_dlp() -> str:
-    # shortcut: 개발 PC의 PATH 또는 %LOCALAPPDATA%\Noritune\bin 의 yt-dlp.exe 를 쓴다.
-    # 설치판에서는 처음 쓸 때 받아 두고 일주일마다 -U 로 업데이트한다 (기획서 F18)
+    # 설치판은 설치 폴더(%LOCALAPPDATA%\Noritune)의 bin\yt-dlp.exe, 개발 PC는 PATH의 것을 쓴다.
+    # 일주일마다 -U 로 업데이트한다 (기획서 F18)
     local = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "Noritune" / "bin" / "yt-dlp.exe"
     exe = str(local) if local.exists() else shutil.which("yt-dlp")
     if not exe:
@@ -89,8 +89,7 @@ def yt_dlp() -> str:
 
 
 def _js_args() -> list[str]:
-    """유튜브는 JavaScript 실행기가 없으면 막는 일이 잦다. deno(기본) 또는 node가 있으면 쓴다.
-    shortcut: 둘 다 없는 PC는 실행기 없이 받는다. 설치판에 deno를 함께 넣을지 출시 전에 정한다."""
+    """유튜브는 JavaScript 실행기가 없으면 막는 일이 잦다. deno(기본, 설치판에 들어 있다) 또는 node가 있으면 쓴다."""
     if shutil.which("deno"):
         return []
     node = shutil.which("node")

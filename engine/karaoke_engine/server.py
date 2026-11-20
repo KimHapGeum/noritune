@@ -32,9 +32,16 @@ PARTS = {"original", "video", "instrumental", "vocals", "chorus"}
 ALLOWED_ORIGINS = ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://localhost:1420"]
 
 
+Gender = Literal["male", "female", "mixed"]
+
+
 class AddSong(BaseModel):
     path: str
     mode: str = "빠른 분리"
+    title: str | None = Field(None, max_length=300)
+    artist: str | None = Field(None, max_length=300)
+    gender: Gender | None = None
+    lyrics_pick: int | None = None  # 곡 추가 화면에서 고른 가사 후보
 
 
 class Decide(BaseModel):
@@ -49,6 +56,8 @@ class AddYoutube(BaseModel):
     duration: float = 0
     mode: str = "빠른 분리"
     lyrics_in_video: str | None = None  # MR 영상일 때: yes / no / unknown
+    gender: Gender | None = None
+    lyrics_pick: int | None = None
 
 
 class ChooseLyrics(BaseModel):
@@ -58,6 +67,7 @@ class ChooseLyrics(BaseModel):
 class LyricLine(BaseModel):
     t: float = Field(ge=0, le=6 * 3600)
     text: str = Field(max_length=500)
+    e: float | None = Field(None, ge=0, le=6 * 3600)  # 이 줄이 끝나는 때 (없으면 다음 줄까지)
 
 
 class SaveLyrics(BaseModel):
@@ -91,7 +101,10 @@ class Settings(BaseModel):
     bg_interval: Literal[10, 30, 0] = 10  # 사진 여러 장일 때 바꾸는 간격(초). 0: 곡마다
     bg_dim: int = Field(55, ge=0, le=90)
     auto_hide: bool = True  # 부르는 동안 버튼 줄 자동 숨김 (기획서 F6)
+    default_mode: Literal["빠른 분리", "고품질 분리", "반주 그대로", "원곡 그대로"] = "빠른 분리"  # 기획서 F3: 기본은 빠른 분리
+    ytdlp_auto: bool = True  # yt-dlp 일주일마다 자동 업데이트
     # 마이크 (기획서 F13). 기본은 꺼짐: 앰프·믹서를 따로 쓰는 사람도 있다
+    volume: int = Field(100, ge=0, le=100)  # 프로그램 소리 크기 (노래 전체, 마이크는 따로)
     mic_on: bool = False
     mic_device: str = Field("", max_length=500)  # 비우면 Windows 기본 마이크
     mic_volume: int = Field(80, ge=0, le=150)
@@ -120,7 +133,7 @@ class SearchLyrics(BaseModel):
 
 def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, detect: DetectFn | None = None,
                search=None, download: DownloadFn | None = None, lyrics_search=None, auto_lyrics=None,
-               to_cpu=None, update_downloader=None, online=None, free_space=None, gpu=None) -> FastAPI:
+               to_cpu=None, update_downloader=None, online=None, free_space=None, gpu=None, models=None) -> FastAPI:
     if separators is None:  # 시험은 가짜를 넣는다. 진짜는 torch를 쓰므로 여기서만 불러온다
         from . import separate as real
 
@@ -128,6 +141,7 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
         detect = real.singing_ratio
         to_cpu = real.use_cpu
         gpu = real.gpu_name
+        models = real.models_status
     if search is None or download is None:
         from . import youtube
 
@@ -167,13 +181,33 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
     @app.post("/songs", status_code=201)
     def add_song(body: AddSong):
         try:
-            song = lib.add_file(body.path, body.mode)
+            song = lib.add_file(body.path, body.mode, body.title, body.artist, body.gender)
         except LibraryError as e:
             raise HTTPException(400, str(e)) from None
         if song["mode"] in MODES_SEPARATE:
             worker.enqueue(song["id"])
-        lyr.on_added(song, body.path)
+        lyr.on_added(song, body.path, body.lyrics_pick)
+        if body.lyrics_pick == -1 and song["status"] == "ready":  # 원곡·반주 그대로는 바로 준비됨
+            worker.enqueue_lyrics(song["id"])
         return lib.get(song["id"])
+
+    @app.get("/probe")
+    def probe(path: str):
+        """넣기 전에 파일의 제목·가수·길이를 읽는다 (곡 추가 화면)"""
+        try:
+            return lib.probe(path)[2]
+        except LibraryError as e:
+            raise HTTPException(400, str(e)) from None
+
+    @app.get("/lyrics/search")
+    def lyrics_preview(title: str, artist: str = "", duration: float = 0):
+        """넣기 전에 가사 후보를 찾는다 (곡 추가 화면에서 위 3개를 보여 준다)"""
+        if not title.strip() or len(title) > 300 or len(artist) > 300:
+            raise HTTPException(400, "제목을 입력해 주세요")
+        try:
+            return {"candidates": lyrics_search(title.strip(), artist.strip(), duration)}
+        except Exception:
+            return {"candidates": []}
 
     @app.get("/youtube/search")
     def youtube_search(q: str, karaoke_only: bool = False):
@@ -188,11 +222,11 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
     def add_youtube(body: AddYoutube):
         try:
             song = lib.add_youtube(body.id, body.video_title, body.title, body.artist, body.duration,
-                                   body.mode, body.lyrics_in_video)
+                                   body.mode, body.lyrics_in_video, body.gender)
         except LibraryError as e:
             raise HTTPException(400, str(e)) from None
         worker.enqueue(song["id"])  # 받기부터 시작한다
-        lyr.on_added(song)  # 가사는 받는 동안 제목으로 찾는다
+        lyr.on_added(song, pick=body.lyrics_pick)  # 가사는 받는 동안 제목으로 찾는다
         return lib.get(song["id"])
 
     @app.get("/songs/{song_id}/lyrics")
@@ -333,7 +367,7 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
     def lyrics_save(song_id: str, body: SaveLyrics):
         find(song_id)
         try:
-            lyr.save(song_id, [x.model_dump() for x in body.lines])
+            lyr.save(song_id, [x.model_dump(exclude_none=True) for x in body.lines])
         except ValueError as e:
             raise HTTPException(409, str(e)) from None
         return lib.get(song_id)
@@ -398,6 +432,7 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
 
         info = {"data_dir": str(lib.data_dir), "free": (free_space or (lambda: shutil.disk_usage(lib.data_dir).free))(),
                 "synced": any(w in str(lib.data_dir).lower() for w in ("onedrive", "dropbox", "google drive", "icloud"))}
+        info["models"] = models() if models else {"quick": False, "hq": False}
         if with_gpu:
             if not gpu_cache:
                 gpu_cache.append(gpu() if gpu else None)
@@ -410,9 +445,21 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
     @app.get("/storage")
     def storage():
         """곡별 사용량 (기획서 6장 저장 공간)"""
-        songs = [{"id": s["id"], "title": s["title"], "artist": s["artist"], "bytes": folder_size(lib.folder(s["id"])),
-                  "stems": bool(s.get("stems")), "last_played": s.get("last_played") or s.get("added_at")} for s in lib.list()]
-        return {"total": sum(x["bytes"] for x in songs), "songs": sorted(songs, key=lambda x: -x["bytes"])}
+        def size(p: Path) -> int:
+            return p.stat().st_size if p.is_file() else 0
+
+        songs, kinds = [], {"original": 0, "stems": 0, "video": 0}
+        for s in lib.list():
+            folder = lib.folder(s["id"])
+            stems = sum(size(folder / f) for f in (s.get("stems") or {}).values())
+            video = size(folder / s["video"]) if s.get("video") else 0
+            total = folder_size(folder)
+            kinds["stems"] += stems
+            kinds["video"] += video
+            kinds["original"] += total - stems - video  # 원곡과 가사 등 나머지
+            songs.append({"id": s["id"], "title": s["title"], "artist": s["artist"], "bytes": total, "stems_bytes": stems,
+                          "stems": bool(s.get("stems")), "last_played": s.get("last_played") or s.get("added_at")})
+        return {"total": sum(x["bytes"] for x in songs), "kinds": kinds, "songs": sorted(songs, key=lambda x: -x["bytes"])}
 
     class Trim(BaseModel):
         days: int = Field(ge=1, le=3650)
@@ -436,6 +483,44 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
             count += 1
         return {"songs": count, "freed": freed}
 
+    class Move(BaseModel):
+        path: str = Field(max_length=1000)
+
+    @app.post("/storage/move")
+    def move_storage(body: Move):
+        """저장 폴더를 옮긴다: 새 폴더로 복사 → 설정 파일에 적기 → 예전 곡 지우기. 끝나면 화면이 처리기를 다시 켠다"""
+        import shutil
+
+        from . import config
+
+        if os.environ.get("KARAOKE_DATA_DIR"):
+            raise HTTPException(409, "시험용 폴더(KARAOKE_DATA_DIR)로 켠 처리기라 바꿀 수 없어요")
+        new, old = Path(body.path), lib.data_dir.resolve()
+        if not new.is_absolute():
+            raise HTTPException(400, "폴더 전체 경로를 골라 주세요")
+        new = new.resolve()
+        if new == old or old in new.parents:
+            raise HTTPException(400, "지금 저장 폴더나 그 안의 폴더로는 옮길 수 없어요")
+        if new.exists() and any(new.iterdir()):
+            raise HTTPException(400, "빈 폴더를 골라 주세요 (다른 파일이 섞이지 않게)")
+        if any(s["status"] in BUSY_NOW | {"queued"} for s in lib.list()):
+            raise HTTPException(409, "반주를 만드는 중이에요. 다 만든 뒤에 옮겨 주세요")
+        new.mkdir(parents=True, exist_ok=True)
+        used = folder_size(old)
+        if shutil.disk_usage(new).free < used + 1024**3:
+            raise HTTPException(400, f"새 폴더의 디스크 공간이 모자라요 ({used / 1024**3:.1f}GB + 여유 1GB 필요)")
+        moved = [x for x in old.iterdir() if x.name != "logs"]  # 로그는 지금 쓰는 중이라 두고 간다
+        try:
+            for x in moved:
+                (shutil.copytree if x.is_dir() else shutil.copy2)(x, new / x.name)
+        except OSError as e:
+            shutil.rmtree(new, ignore_errors=True)  # 반쯤 복사한 것은 지우고 예전 폴더를 그대로 쓴다
+            raise HTTPException(500, f"복사하지 못했어요: {e}") from None
+        config.set_data_dir(new)
+        for x in moved:  # 다 복사하고 설정까지 적은 뒤에만 예전 것을 지운다
+            shutil.rmtree(x, ignore_errors=True) if x.is_dir() else x.unlink(missing_ok=True)
+        return {"data_dir": str(new), "restart": True}
+
     @app.post("/ytdlp/update")
     def ytdlp_update():
         """yt-dlp 지금 업데이트 (설정 버튼, 기획서 F18)"""
@@ -454,7 +539,8 @@ def create_app(data_dir: Path, separators: dict[str, SeparateFn] | None = None, 
         import threading
         import time
 
-        if update_downloader and time.time() - load_settings().ytdlp_checked > 7 * 86400:
+        s = load_settings()
+        if update_downloader and s.ytdlp_auto and time.time() - s.ytdlp_checked > 7 * 86400:
             threading.Thread(target=lambda: _quiet(ytdlp_update), daemon=True).start()
 
     def _quiet(fn):
