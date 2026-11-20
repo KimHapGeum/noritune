@@ -1,6 +1,6 @@
-FFmpeg n9.0 (LGPL build by BtbN/FFmpeg-Builds, unmodified)
+FFmpeg n9.0.2-58-g8c7ef49002 (LGPL build by BtbN/FFmpeg-Builds autobuild-2026-11-19-12-39, unmodified)
 Source code: https://github.com/FFmpeg/FFmpeg/tree/release/9.0
-Build scripts: https://github.com/BtbN/FFmpeg-Builds
+Build scripts: https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-11-19-12-39
 
                    GNU LESSER GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007

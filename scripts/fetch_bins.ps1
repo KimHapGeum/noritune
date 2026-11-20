@@ -1,11 +1,14 @@
 # 설치 파일에 함께 넣을 프로그램 받기 (RELEASE.md 2단계). 판을 올릴 때는 아래 버전만 바꾼다
 # - uv: 처음 켤 때 파이썬과 PyTorch 등을 받아 처리기 실행 환경을 만든다
 # - ffmpeg(LGPL 빌드, GPL 빌드는 넣지 않는다), yt-dlp, deno(유튜브가 요구하는 JavaScript 실행기)
-# 받는 곳: ~/.cache/karaoke/bin (OneDrive 밖). 라이선스 전문은 app/src/licenses/ 에 쓴다
+# 받는 곳: -Out (기본 ~/.cache/karaoke/bin, OneDrive 밖. GitHub Actions는 따로 준다). 라이선스 전문은 app/src/licenses/ 에 쓴다
+# 모두 판을 고정한다: 같은 소스에서 같은 설치 파일이 나와야 한다 (무료 코드 서명 조건)
+param([string]$Out = (Join-Path $env:USERPROFILE ".cache\karaoke\bin"))
 $ErrorActionPreference = "Stop"
-$UV = "0.13.9"; $DENO = "v2.9.8"; $YTDLP = "2026.10.26"; $FFMPEG = "n9.0"
+$UV = "0.13.9"; $DENO = "v2.9.8"; $YTDLP = "2026.10.26"
+$FFMPEG = "n9.0"; $FFMPEG_TAG = "autobuild-2026-11-19-12-39"; $FFMPEG_ZIP = "ffmpeg-n9.0.2-58-g8c7ef49002-win64-lgpl-9.0.zip"
 
-$bin = Join-Path $env:USERPROFILE ".cache\karaoke\bin"
+$bin = $Out
 $lic = Join-Path $PSScriptRoot "..\app\src\licenses"
 $tmp = Join-Path $env:TEMP "noritune-fetch"
 Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
@@ -30,15 +33,15 @@ Get-File "https://raw.githubusercontent.com/denoland/deno/$DENO/LICENSE.md" (Joi
 Get-File "https://github.com/yt-dlp/yt-dlp/releases/download/$YTDLP/yt-dlp.exe" (Join-Path $bin "yt-dlp.exe")
 Get-File "https://raw.githubusercontent.com/yt-dlp/yt-dlp/$YTDLP/LICENSE" (Join-Path $lic "yt-dlp.txt")
 
-$d = Get-Zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-$FFMPEG-latest-win64-lgpl-$($FFMPEG.TrimStart('n')).zip" "ffmpeg"
+$d = Get-Zip "https://github.com/BtbN/FFmpeg-Builds/releases/download/$FFMPEG_TAG/$FFMPEG_ZIP" "ffmpeg"
 # ffprobe는 넣지 않는다 (128MB, yt-dlp의 영상 합치기는 ffmpeg만 쓴다)
 Copy-Item (Get-ChildItem $d -Recurse -Filter ffmpeg.exe | Select-Object -First 1).FullName $bin -Force
 $ffLicense = Get-Content (Get-ChildItem $d -Recurse -Filter LICENSE.txt | Select-Object -First 1).FullName -Raw
 # LGPL: 고치지 않은 FFmpeg를 그대로 넣었고, 소스는 아래에서 받을 수 있다고 함께 적는다
 Set-Content (Join-Path $lic "ffmpeg.txt") -Encoding utf8 -Value @"
-FFmpeg $FFMPEG (LGPL build by BtbN/FFmpeg-Builds, unmodified)
+FFmpeg $($FFMPEG_ZIP -replace '^ffmpeg-(.+?)-win64.*$', '$1') (LGPL build by BtbN/FFmpeg-Builds $FFMPEG_TAG, unmodified)
 Source code: https://github.com/FFmpeg/FFmpeg/tree/release/$($FFMPEG.TrimStart('n'))
-Build scripts: https://github.com/BtbN/FFmpeg-Builds
+Build scripts: https://github.com/BtbN/FFmpeg-Builds/releases/tag/$FFMPEG_TAG
 
 $ffLicense
 "@

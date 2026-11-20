@@ -11,6 +11,32 @@
 
 Noritune은 MIT 라이선스로 공개합니다 (`LICENSE`). 음원과 가사는 함께 배포하지 않습니다.
 
+## Code signing policy (코드 서명 정책)
+
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
+(신청 중입니다. 승인되면 이 저장소의 GitHub Actions(`.github/workflows/build.yml`)가 소스에서 빌드한 설치 파일만 서명합니다.)
+
+- 커밋·검토(Committers and reviewers): [KimHapGeum](https://github.com/KimHapGeum)
+- 서명 승인(Approvers): [KimHapGeum](https://github.com/KimHapGeum)
+- 함께 넣는 다른 오픈 소스 프로그램(ffmpeg, yt-dlp 등)은 원래 배포된 그대로 넣고 우리가 서명하지 않습니다.
+
+## Privacy policy (개인정보)
+
+This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it, except as listed below.
+Noritune은 계정이 없고, 사용 기록을 모으거나 보내지 않습니다. 곡·가사·설정은 이 PC에만 저장됩니다. 아래 기능만 인터넷에 접속합니다.
+
+| 언제 | 어디로 | 보내는 것 | 끄는 법 |
+|---|---|---|---|
+| 처음 켤 때, 새 버전에서 부품이 바뀔 때 | PyPI, download.pytorch.org, GitHub (python-build-standalone) | 내려받기 요청 | 없음 (반주 분리에 꼭 필요) |
+| 반주 방식을 처음 쓸 때 | 분리 모델·음성 인식 모델 저장소 (GitHub, Hugging Face) | 내려받기 요청 | 그 방식을 쓰지 않으면 받지 않음 |
+| 곡을 넣을 때 | lrclib.net (가사 찾기) | 곡 제목·가수·길이 | 아직 없음 (가사가 든 노래방 영상은 찾지 않음) |
+| 유튜브에서 곡을 찾거나 받을 때 | YouTube (yt-dlp) | 검색어·영상 주소 | 쓰지 않으면 접속 없음 |
+| 재생 화면 배경이 "유튜브 뮤비"일 때 (기본값) | YouTube (검색, 영상 재생) | 곡 제목·가수 | 설정 → 재생 화면 배경 → 기본 배경화면 |
+| 켤 때 | GitHub (새 버전 확인) | 확인 요청 | 없음 |
+| 일주일에 한 번 | GitHub (yt-dlp 업데이트) | 확인 요청 | 설정 → 업데이트 → yt-dlp 자동 업데이트 끄기 |
+
+접속하는 곳의 개인정보 처리는 각 서비스의 정책을 따릅니다 ([YouTube](https://policies.google.com/privacy), [GitHub](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement), [Hugging Face](https://huggingface.co/privacy), [PyPI](https://policies.python.org/pypi.org/Privacy-Notice/)).
+
 ## 오픈 소스 라이선스
 
 이 프로그램은 아래 오픈 소스를 씁니다. 전문은 `app/src/licenses/`에 있고, 앱의 설정 → 정보와 설치 폴더의 `licenses/`에도 들어갑니다.
@@ -48,9 +74,9 @@ SOFTWARE.
 https://ffmpeg.org
 
 ```
-FFmpeg n9.0 (LGPL build by BtbN/FFmpeg-Builds, unmodified)
+FFmpeg n9.0.2-58-g8c7ef49002 (LGPL build by BtbN/FFmpeg-Builds autobuild-2026-11-19-12-39, unmodified)
 Source code: https://github.com/FFmpeg/FFmpeg/tree/release/9.0
-Build scripts: https://github.com/BtbN/FFmpeg-Builds
+Build scripts: https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-11-19-12-39
 
                    GNU LESSER GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
