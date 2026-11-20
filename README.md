@@ -5,6 +5,11 @@
 - 화면: Tauri 2 + React + TypeScript (`app/`)
 - 처리기: Python 3.12 (`engine/`): 반주 분리, 유튜브 받기, 가사 찾기·자동 생성
 - 기획서: `PRD.md`, 배포 순서: `RELEASE.md`
+- 설치 파일: https://github.com/KimHapGeum/noritune-update/releases/latest
+
+## 라이선스
+
+Noritune은 MIT 라이선스로 공개합니다 (`LICENSE`). 음원과 가사는 함께 배포하지 않습니다.
 
 ## 오픈 소스 라이선스
 

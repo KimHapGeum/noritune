@@ -1,6 +1,7 @@
 [project]
 name = "karaoke-engine"
 version = "0.1.0"
+license = "MIT"
 description = "노래방 프로그램의 파이썬 처리기 (곡 관리, 반주 분리, 가사)"
 requires-python = ">=3.12,<3.13"
 dependencies = [

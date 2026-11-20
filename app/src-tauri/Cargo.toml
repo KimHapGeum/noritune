@@ -2,6 +2,7 @@
 name = "noritune"
 version = "0.1.0"
 description = "Noritune 노래방 프로그램"
+license = "MIT"
 edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
