@@ -4,7 +4,7 @@
 
 - 화면: Tauri 2 + React + TypeScript (`app/`)
 - 처리기: Python 3.12 (`engine/`): 반주 분리, 유튜브 받기, 가사 찾기·자동 생성
-- 기획서: `PRD.md`, 배포 순서: `RELEASE.md`
+- 배포 순서: `RELEASE.md`
 - 설치 파일: https://github.com/KimHapGeum/noritune-update/releases/latest
 
 ## 라이선스
@@ -13,8 +13,15 @@ Noritune은 MIT 라이선스로 공개합니다 (`LICENSE`). 음원과 가사는
 
 ## Code signing policy (코드 서명 정책)
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).
-(신청 중입니다. 승인되면 이 저장소의 GitHub Actions(`.github/workflows/build.yml`)가 소스에서 빌드한 설치 파일만 서명합니다.)
+지금 설치 파일은 코드 서명이 없습니다. 서명을 받으면 이 저장소의 GitHub Actions(`.github/workflows/build.yml`)가 소스에서 빌드한 설치 파일만 서명합니다.
+
+### 설치가 막힐 때
+
+서명이 없어서 Windows가 설치 파일을 막을 수 있습니다.
+
+- **"Windows의 PC 보호" 파란 창 (SmartScreen)**: `추가 정보` → `실행`을 누르면 설치됩니다.
+- **스마트 앱 컨트롤이 막을 때**: 스마트 앱 컨트롤이 켜진 PC에서는 서명 없는 프로그램을 실행할 수 없습니다. `Windows 보안` → `앱 및 브라우저 컨트롤` → `스마트 앱 컨트롤`에서 끌 수 있지만, 한 번 끄면 Windows를 다시 설치하기 전에는 다시 켤 수 없습니다. 끌지는 직접 판단해 주세요.
+- 설치 파일은 GitHub Releases에서만 받으세요. 다른 곳에서 받은 파일은 조작됐을 수 있습니다.
 
 - 커밋·검토(Committers and reviewers): [KimHapGeum](https://github.com/KimHapGeum)
 - 서명 승인(Approvers): [KimHapGeum](https://github.com/KimHapGeum)
